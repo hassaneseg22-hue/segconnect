@@ -1,0 +1,97 @@
+import { NextResponse, type NextRequest } from 'next/server';
+import { getPool } from '@/lib/mysql';
+import { findUserByEmail } from '@/lib/users/users';
+import { verifyPassword } from '@/lib/security/password';
+import { createServerSession } from '@/lib/auth/session';
+import { createAuditLog } from '@/lib/auth/audit';
+import { getEffectivePermissions } from '@/lib/auth/auth';
+import { isLoginBlocked, recordLoginAttempt } from '@/lib/security/rate-limit';
+import { insertNotification } from '@/lib/notifications-db';
+
+export async function POST(req: NextRequest) {
+  let body: any;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ ok: false, error: 'VALIDATION_ERROR' }, { status: 422 });
+  }
+  const email = String(body.email || '').trim().toLowerCase();
+  const password = String(body.password || '');
+  const remember = Boolean(body.remember);
+
+  if (!email || !password) {
+    return NextResponse.json({ ok: false, error: 'VALIDATION_ERROR' }, { status: 422 });
+  }
+
+  const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || req.headers.get('x-real-ip') || null;
+  const userAgent = req.headers.get('user-agent');
+
+  try {
+    if (await isLoginBlocked(email, ip)) {
+      await createAuditLog({
+        userId: null, action: 'LOGIN_FAILED', description: 'Tentative de connexion bloquée (trop d’échecs)',
+        metadata: { email }, ip, userAgent, result: 'FAILED',
+      });
+      return NextResponse.json({ ok: false, error: 'RATE_LIMITED' }, { status: 429 });
+    }
+
+    const user = await findUserByEmail(email);
+    if (!user || !user.password_hash || !verifyPassword(password, user.password_hash)) {
+      await recordLoginAttempt({ email, userId: user?.id ?? null, ip, success: false, reason: 'BAD_PASSWORD' });
+      await createAuditLog({
+        userId: user?.id ?? null, action: 'LOGIN_FAILED', description: 'Échec de connexion',
+        metadata: { email }, ip, userAgent, result: 'FAILED',
+      });
+      return NextResponse.json({ ok: false, error: 'INVALID_CREDENTIALS' }, { status: 401 });
+    }
+
+    if (user.status !== 'ACTIVE') {
+      await recordLoginAttempt({ email, userId: user.id, ip, success: false, reason: `STATUS:${user.status}` });
+      await createAuditLog({
+        userId: user.id, action: 'LOGIN_FAILED', description: `Connexion refusée (compte ${user.status})`,
+        metadata: { email, status: user.status }, ip, userAgent, result: 'FAILED',
+      });
+      return NextResponse.json({ ok: false, error: 'ACCOUNT_INACTIVE' }, { status: 403 });
+    }
+
+    const { rawToken, cookie } = await createServerSession(user.id, ip || '', userAgent || '');
+    const ttl = remember ? 30 * 24 * 3600 : 12 * 3600;
+    const finalCookie = `${cookie.includes('Max-Age=') ? cookie.split(';').map((s) => (s.trim().startsWith('Max-Age=') ? `Max-Age=${ttl}` : s)).join(';') : cookie}`;
+
+    await recordLoginAttempt({ email, userId: user.id, ip, success: true, reason: null });
+    await getPool().query('UPDATE users SET last_login_at = NOW(), last_login_ip = ? WHERE id = ?', [ip, user.id]);
+    await createAuditLog({
+      userId: user.id, action: 'LOGIN_SUCCESS', description: `Connexion réussie`,
+      metadata: { email }, ip, userAgent, result: 'SUCCESS',
+    });
+    await insertNotification({
+      type: 'info', category: 'SECURITY', title: 'Nouvelle connexion',
+      message: 'Le compte vient de se connecter.', source: 'auth',
+      target_url: '/audit', severity_score: 2,
+      metadata: { email, ip },
+    });
+
+    const permissions = await getEffectivePermissions(user.id, user.role_id, user.role_code);
+
+    const res = NextResponse.json({
+      ok: true,
+      data: {
+        id: user.id,
+        firstName: user.first_name,
+        lastName: user.last_name,
+        email: user.email,
+        roleCode: user.role_code,
+        permissions,
+        redirect: '/',
+      },
+    });
+    res.headers.set('Set-Cookie', finalCookie);
+    return res;
+  } catch (err) {
+    await createAuditLog({
+      userId: null, action: 'LOGIN_FAILED', description: 'Erreur interne lors de la connexion',
+      metadata: { email, error: err instanceof Error ? err.message : 'unknown' }, ip, userAgent, result: 'FAILED',
+    });
+    return NextResponse.json({ ok: false, error: 'INTERNAL_SERVER_ERROR' }, { status: 500 });
+  }
+}

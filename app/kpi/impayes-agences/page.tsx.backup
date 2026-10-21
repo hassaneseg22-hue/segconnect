@@ -1,0 +1,1448 @@
+'use client';
+
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
+import {
+  AlertTriangle,
+  ArrowDownRight,
+  ArrowLeft,
+  Building2,
+  CalendarDays,
+  ChevronDown,
+  FileSpreadsheet,
+  Percent,
+  RefreshCw,
+  ShieldCheck,
+  TrendingUp,
+  Users,
+} from 'lucide-react';
+
+type AgencyRow = {
+  id: number;
+  code: string;
+  name: string;
+  emissions: number;
+  impayes: number;
+  rate: number;
+  rows: number;
+  agents: number;
+  periods: number[];
+};
+
+type ApiData = {
+  year: number;
+  period: number | null;
+  periods: number[];
+  agencies: AgencyRow[];
+  totals: {
+    emissions: number;
+    impayes: number;
+    rate: number;
+    agencies: number;
+    rows: number;
+  };
+};
+
+const PERIOD_LABELS: Record<number, string> = {
+  1: 'Jan',
+  3: 'Mar',
+  5: 'Mai',
+  7: 'Juil',
+  9: 'Sept',
+  11: 'Nov',
+};
+
+function formatGnf(value: number) {
+  return new Intl.NumberFormat('fr-FR', {
+    maximumFractionDigits: 0,
+  }).format(Math.round(Number(value) || 0)) + ' GNF';
+}
+
+function formatCompactGnf(value: number) {
+  const n = Number(value) || 0;
+
+  if (Math.abs(n) >= 1_000_000_000) {
+    return `${(n / 1_000_000_000).toLocaleString('fr-FR', {
+      maximumFractionDigits: 2,
+    })} Md GNF`;
+  }
+
+  if (Math.abs(n) >= 1_000_000) {
+    return `${(n / 1_000_000).toLocaleString('fr-FR', {
+      maximumFractionDigits: 1,
+    })} M GNF`;
+  }
+
+  if (Math.abs(n) >= 1_000) {
+    return `${(n / 1_000).toLocaleString('fr-FR', {
+      maximumFractionDigits: 1,
+    })} k GNF`;
+  }
+
+  return `${Math.round(n).toLocaleString('fr-FR')} GNF`;
+}
+
+function formatPct(value: number) {
+  return `${((Number(value) || 0) * 100).toLocaleString('fr-FR', {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 2,
+  })} %`;
+}
+
+function periodLabel(month: number) {
+  return PERIOD_LABELS[month] || `P${month}`;
+}
+
+function rateClass(rate: number) {
+  if (rate >= 0.15) return 'rate-high';
+  if (rate >= 0.1) return 'rate-medium';
+  return 'rate-low';
+}
+
+function rateLabel(rate: number) {
+  if (rate >= 0.15) return 'Élevé';
+  if (rate >= 0.1) return 'À surveiller';
+  return 'Maîtrisé';
+}
+
+function KpiCard({
+  icon,
+  title,
+  value,
+  subtitle,
+  tone,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  value: string;
+  subtitle: string;
+  tone: 'cyan' | 'red' | 'violet' | 'green';
+}) {
+  return (
+    <div className={`kpi-card tone-${tone}`}>
+      <div className="kpi-top">
+        <div className="kpi-icon">{icon}</div>
+        <span className="kpi-dot" />
+      </div>
+      <div className="kpi-title">{title}</div>
+      <div className="kpi-value">{value}</div>
+      <div className="kpi-subtitle">{subtitle}</div>
+    </div>
+  );
+}
+
+export default function ImpayesAgencesPage() {
+  const [year, setYear] = useState(2026);
+  const [agency, setAgency] = useState('all');
+  const [period, setPeriod] = useState('all');
+  const [data, setData] = useState<ApiData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError('');
+
+    try {
+      const params = new URLSearchParams({
+        year: String(year),
+        agencyId: agency,
+        period,
+      });
+
+      const response = await fetch(`/api/kpi/impayes-agences?${params.toString()}`, {
+        cache: 'no-store',
+      });
+
+      const json = await response.json();
+
+      if (!response.ok || !json.ok) {
+        throw new Error(json.error || 'Impossible de charger les impayés.');
+      }
+
+      setData(json.data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Erreur de chargement.');
+    } finally {
+      setLoading(false);
+    }
+  }, [agency, period, year]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const maxImpayes = useMemo(
+    () => Math.max(...(data?.agencies || []).map((a) => a.impayes), 1),
+    [data]
+  );
+
+  const topThree = useMemo(
+    () => (data?.agencies || []).slice(0, 3),
+    [data]
+  );
+
+  const availablePeriods = useMemo(() => {
+    const values = new Set<number>();
+    for (const agencyRow of data?.agencies || []) {
+      for (const p of agencyRow.periods || []) values.add(p);
+    }
+    return Array.from(values).sort((a, b) => a - b);
+  }, [data]);
+
+  return (
+    <main className="impayes-page">
+      <div className="page-shell">
+        <div className="breadcrumb">
+          <Link href="/">Tableau de bord</Link>
+          <span>/</span>
+          <span>Finance &amp; Recouvrement</span>
+          <span>/</span>
+          <strong>État des impayés par agence</strong>
+        </div>
+
+        <section className="hero">
+          <div>
+            <div className="eyebrow">
+              <span className="eyebrow-dot" />
+              PILOTAGE FINANCIER • EXERCICE {year}
+            </div>
+
+            <div className="hero-title-row">
+              <div>
+                <h1>État des impayés par agence</h1>
+                <p>
+                  Analyse territoriale des créances à recouvrer à partir des données
+                  officielles SEG.
+                </p>
+              </div>
+
+              <div className="hero-actions">
+                <span className="official-badge">
+                  <ShieldCheck size={14} />
+                  DONNÉES OFFICIELLES SEG
+                </span>
+
+                <button
+                  type="button"
+                  className="refresh-btn"
+                  onClick={() => void load()}
+                  disabled={loading}
+                >
+                  <RefreshCw size={15} className={loading ? 'spin' : ''} />
+                  {loading ? 'Actualisation…' : 'Actualiser'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="filters-card">
+          <div className="filter-group">
+            <label>
+              <CalendarDays size={13} />
+              EXERCICE
+            </label>
+            <div className="select-wrap">
+              <select value={year} onChange={(e) => setYear(Number(e.target.value))}>
+                <option value={2026}>2026</option>
+              </select>
+              <ChevronDown size={15} />
+            </div>
+          </div>
+
+          <div className="filter-group">
+            <label>
+              <Building2 size={13} />
+              AGENCE
+            </label>
+            <div className="select-wrap">
+              <select value={agency} onChange={(e) => setAgency(e.target.value)}>
+                <option value="all">Toutes les agences</option>
+                {(data?.agencies || []).map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.code} — {item.name}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown size={15} />
+            </div>
+          </div>
+
+          <div className="filter-group">
+            <label>
+              <CalendarDays size={13} />
+              PÉRIODE
+            </label>
+            <div className="select-wrap">
+              <select value={period} onChange={(e) => setPeriod(e.target.value)}>
+                <option value="all">Toutes les périodes</option>
+                {(availablePeriods.length
+                  ? availablePeriods
+                  : data?.periods || [1, 3, 5, 7, 9, 11]
+                ).map((p) => (
+                  <option key={p} value={p}>
+                    {periodLabel(p)} 2026
+                  </option>
+                ))}
+              </select>
+              <ChevronDown size={15} />
+            </div>
+          </div>
+
+          <div className="filter-status">
+            <span className="status-light" />
+            <span>{loading ? 'Synchronisation…' : 'Données synchronisées'}</span>
+          </div>
+        </section>
+
+        {error && (
+          <div className="error-card">
+            <AlertTriangle size={18} />
+            <div>
+              <strong>Impossible de charger les données</strong>
+              <span>{error}</span>
+            </div>
+            <button type="button" onClick={() => void load()}>
+              Réessayer
+            </button>
+          </div>
+        )}
+
+        <section className="kpi-grid">
+          <KpiCard
+            tone="cyan"
+            icon={<FileSpreadsheet size={19} />}
+            title="Émissions"
+            value={formatCompactGnf(data?.totals.emissions || 0)}
+            subtitle="Volume des émissions suivies"
+          />
+          <KpiCard
+            tone="red"
+            icon={<AlertTriangle size={19} />}
+            title="Total des impayés"
+            value={formatCompactGnf(data?.totals.impayes || 0)}
+            subtitle="Montant à recouvrer"
+          />
+          <KpiCard
+            tone="violet"
+            icon={<Percent size={19} />}
+            title="Taux global d'impayés"
+            value={formatPct(data?.totals.rate || 0)}
+            subtitle="Impayés / émissions"
+          />
+          <KpiCard
+            tone="green"
+            icon={<Building2 size={19} />}
+            title="Agences suivies"
+            value={String(data?.totals.agencies || 0)}
+            subtitle="Référentiel SEG actif"
+          />
+        </section>
+
+        <section className="analysis-grid">
+          <div className="panel ranking-panel">
+            <div className="panel-head">
+              <div>
+                <div className="panel-kicker">VUE TERRITORIALE</div>
+                <h2>Concentration des impayés</h2>
+                <p>Classement par montant d&apos;impayés à recouvrer.</p>
+              </div>
+              <div className="panel-badge">
+                <TrendingUp size={14} />
+                {data?.totals.agencies || 0} agences
+              </div>
+            </div>
+
+            <div className="ranking-list">
+              {(data?.agencies || []).map((item, index) => {
+                const width = Math.max(5, (item.impayes / maxImpayes) * 100);
+
+                return (
+                  <div className="ranking-row" key={item.id}>
+                    <div className={`rank ${index < 3 ? 'top-rank' : ''}`}>
+                      {String(index + 1).padStart(2, '0')}
+                    </div>
+
+                    <div className="ranking-main">
+                      <div className="ranking-label">
+                        <div>
+                          <span className="agency-code">{item.code}</span>
+                          <strong>{item.name}</strong>
+                        </div>
+                        <div className="ranking-value">
+                          <strong>{formatCompactGnf(item.impayes)}</strong>
+                          <span>{formatPct(item.rate)}</span>
+                        </div>
+                      </div>
+
+                      <div className="progress-track">
+                        <div
+                          className="progress-fill"
+                          style={{ width: `${width}%` }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+
+              {!loading && !data?.agencies?.length && (
+                <div className="empty-state">Aucune donnée disponible pour ces filtres.</div>
+              )}
+            </div>
+          </div>
+
+          <div className="panel focus-panel">
+            <div className="panel-head">
+              <div>
+                <div className="panel-kicker">FOCUS DG</div>
+                <h2>Top 3 des montants</h2>
+                <p>Agences concentrant les plus gros impayés.</p>
+              </div>
+              <ArrowDownRight size={18} />
+            </div>
+
+            <div className="focus-list">
+              {topThree.map((item, index) => (
+                <div className="focus-item" key={item.id}>
+                  <div className={`focus-rank rank-${index + 1}`}>
+                    {String(index + 1).padStart(2, '0')}
+                  </div>
+                  <div className="focus-content">
+                    <div className="focus-name">
+                      <span>{item.code}</span>
+                      <strong>{item.name}</strong>
+                    </div>
+                    <div className="focus-amount">{formatGnf(item.impayes)}</div>
+                    <div className="focus-meta">
+                      <span>{formatPct(item.rate)} du montant émis</span>
+                      <span>{item.agents} agents</span>
+                    </div>
+                  </div>
+                </div>
+              ))}
+
+              {!loading && topThree.length === 0 && (
+                <div className="empty-state">Aucun classement disponible.</div>
+              )}
+            </div>
+
+            <div className="focus-note">
+              <AlertTriangle size={15} />
+              <span>
+                Le classement est calculé uniquement à partir des montants présents
+                dans la source officielle des impayés.
+              </span>
+            </div>
+          </div>
+        </section>
+
+        <section className="panel table-panel">
+          <div className="panel-head table-head">
+            <div>
+              <div className="panel-kicker">DÉTAIL PAR AGENCE</div>
+              <h2>Situation consolidée</h2>
+              <p>Émissions, impayés et couverture des données disponibles.</p>
+            </div>
+
+            <div className="rows-counter">
+              <span>{data?.totals.rows || 0}</span>
+              lignes sources
+            </div>
+          </div>
+
+          <div className="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th className="rank-col">#</th>
+                  <th>Agence</th>
+                  <th>Émissions</th>
+                  <th>Impayés</th>
+                  <th>Taux</th>
+                  <th>Agents</th>
+                  <th>Périodes disponibles</th>
+                  <th>Indicateur</th>
+                </tr>
+              </thead>
+
+              <tbody>
+                {(data?.agencies || []).map((item, index) => (
+                  <tr key={item.id}>
+                    <td className="rank-cell">
+                      {String(index + 1).padStart(2, '0')}
+                    </td>
+
+                    <td>
+                      <div className="agency-cell">
+                        <span className="agency-avatar">
+                          <Building2 size={15} />
+                        </span>
+                        <div>
+                          <strong>{item.name}</strong>
+                          <span>{item.code}</span>
+                        </div>
+                      </div>
+                    </td>
+
+                    <td className="money-cell">{formatGnf(item.emissions)}</td>
+
+                    <td className="money-cell danger-money">
+                      {formatGnf(item.impayes)}
+                    </td>
+
+                    <td>
+                      <span className={`rate-pill ${rateClass(item.rate)}`}>
+                        {formatPct(item.rate)}
+                      </span>
+                    </td>
+
+                    <td>
+                      <span className="agents-cell">
+                        <Users size={14} />
+                        {item.agents}
+                      </span>
+                    </td>
+
+                    <td>
+                      <div className="periods">
+                        {(item.periods || []).length ? (
+                          item.periods.map((p) => (
+                            <span key={p}>{periodLabel(p)}</span>
+                          ))
+                        ) : (
+                          <span className="muted">Aucune</span>
+                        )}
+                      </div>
+                    </td>
+
+                    <td>
+                      <span className={`situation ${rateClass(item.rate)}`}>
+                        <i />
+                        {rateLabel(item.rate)}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+
+                {!loading && !data?.agencies?.length && (
+                  <tr>
+                    <td colSpan={8}>
+                      <div className="empty-state">Aucune donnée disponible.</div>
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section className="dg-note">
+          <div className="dg-note-icon">
+            <ShieldCheck size={18} />
+          </div>
+          <div>
+            <div className="panel-kicker">LECTURE DG</div>
+            <h3>Une vue consolidée pour prioriser le recouvrement</h3>
+            <p>
+              Cette vue permet de comparer la situation des impayés entre les
+              agences SEG et d&apos;identifier rapidement les principaux volumes à
+              recouvrer. Les montants affichés proviennent de la source officielle
+              des impayés par zone.
+            </p>
+          </div>
+        </section>
+
+        <div className="source-line">
+          <span className="source-dot" />
+          Source : <code>seg_impayes_zone</code>
+          <span className="source-separator">•</span>
+          Exercice {year}
+          <span className="source-separator">•</span>
+          {data?.totals.rows || 0} lignes sources
+        </div>
+      </div>
+
+      <style jsx>{`
+        .impayes-page {
+          min-height: 100%;
+          color: var(--text-strong, #f8fafc);
+          background:
+            radial-gradient(circle at 80% 0%, rgba(14, 165, 233, 0.055), transparent 28%),
+            radial-gradient(circle at 15% 25%, rgba(37, 99, 235, 0.035), transparent 25%);
+        }
+
+        .page-shell {
+          max-width: 1600px;
+          margin: 0 auto;
+          padding: 22px 28px 44px;
+        }
+
+        .breadcrumb {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          margin-bottom: 18px;
+          color: var(--text-muted, #64748b);
+          font-size: 11px;
+        }
+
+        .breadcrumb a {
+          color: #38bdf8;
+          text-decoration: none;
+        }
+
+        .breadcrumb strong {
+          color: #94a3b8;
+          font-weight: 600;
+        }
+
+        .hero {
+          margin-bottom: 18px;
+        }
+
+        .eyebrow,
+        .panel-kicker {
+          display: flex;
+          align-items: center;
+          gap: 7px;
+          color: #38bdf8;
+          font-size: 10px;
+          font-weight: 800;
+          letter-spacing: 0.12em;
+        }
+
+        .eyebrow-dot {
+          width: 6px;
+          height: 6px;
+          border-radius: 50%;
+          background: #38bdf8;
+          box-shadow: 0 0 10px rgba(56, 189, 248, 0.75);
+        }
+
+        .hero-title-row {
+          display: flex;
+          justify-content: space-between;
+          align-items: flex-end;
+          gap: 24px;
+          margin-top: 7px;
+        }
+
+        h1 {
+          margin: 0;
+          font-size: clamp(25px, 2.3vw, 34px);
+          line-height: 1.1;
+          letter-spacing: -0.035em;
+          font-weight: 800;
+        }
+
+        .hero p {
+          margin: 9px 0 0;
+          color: var(--text-muted, #94a3b8);
+          font-size: 13px;
+        }
+
+        .hero-actions {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          flex-shrink: 0;
+        }
+
+        .official-badge,
+        .panel-badge,
+        .rows-counter {
+          display: inline-flex;
+          align-items: center;
+          gap: 7px;
+          border: 1px solid rgba(56, 189, 248, 0.18);
+          background: rgba(56, 189, 248, 0.07);
+          color: #7dd3fc;
+          border-radius: 999px;
+          padding: 8px 11px;
+          font-size: 9px;
+          font-weight: 800;
+          letter-spacing: 0.05em;
+        }
+
+        .refresh-btn {
+          display: inline-flex;
+          align-items: center;
+          gap: 7px;
+          min-height: 35px;
+          border: 1px solid rgba(56, 189, 248, 0.22);
+          border-radius: 9px;
+          padding: 0 13px;
+          background: rgba(8, 47, 73, 0.55);
+          color: #bae6fd;
+          font-size: 11px;
+          font-weight: 700;
+          cursor: pointer;
+          transition: 160ms ease;
+        }
+
+        .refresh-btn:hover:not(:disabled) {
+          border-color: rgba(56, 189, 248, 0.5);
+          background: rgba(14, 116, 144, 0.2);
+        }
+
+        .refresh-btn:disabled {
+          opacity: 0.65;
+          cursor: wait;
+        }
+
+        .spin {
+          animation: spin 0.9s linear infinite;
+        }
+
+        .filters-card,
+        .panel,
+        .dg-note {
+          border: 1px solid rgba(56, 100, 145, 0.22);
+          background:
+            linear-gradient(135deg, rgba(15, 35, 57, 0.92), rgba(7, 23, 40, 0.92));
+          box-shadow:
+            inset 0 1px 0 rgba(255, 255, 255, 0.025),
+            0 14px 38px rgba(0, 0, 0, 0.14);
+          border-radius: 13px;
+        }
+
+        .filters-card {
+          display: grid;
+          grid-template-columns: 190px minmax(240px, 1fr) 210px auto;
+          gap: 12px;
+          align-items: end;
+          padding: 14px;
+          margin-bottom: 14px;
+        }
+
+        .filter-group label {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          color: #64748b;
+          font-size: 9px;
+          font-weight: 800;
+          letter-spacing: 0.1em;
+          margin-bottom: 6px;
+        }
+
+        .select-wrap {
+          position: relative;
+        }
+
+        .select-wrap select {
+          appearance: none;
+          width: 100%;
+          height: 38px;
+          padding: 0 34px 0 11px;
+          border: 1px solid rgba(71, 108, 143, 0.34);
+          border-radius: 8px;
+          outline: none;
+          background: rgba(5, 21, 36, 0.7);
+          color: #dbeafe;
+          font-size: 11px;
+          cursor: pointer;
+        }
+
+        .select-wrap svg {
+          position: absolute;
+          right: 10px;
+          top: 50%;
+          transform: translateY(-50%);
+          color: #64748b;
+          pointer-events: none;
+        }
+
+        .filter-status {
+          height: 38px;
+          display: flex;
+          align-items: center;
+          justify-content: flex-end;
+          gap: 7px;
+          color: #94a3b8;
+          font-size: 10px;
+          white-space: nowrap;
+          padding: 0 7px;
+        }
+
+        .status-light,
+        .source-dot {
+          width: 7px;
+          height: 7px;
+          border-radius: 50%;
+          background: #10b981;
+          box-shadow: 0 0 12px rgba(16, 185, 129, 0.7);
+        }
+
+        .error-card {
+          display: flex;
+          align-items: center;
+          gap: 11px;
+          margin-bottom: 14px;
+          padding: 12px 14px;
+          border: 1px solid rgba(239, 68, 68, 0.24);
+          border-radius: 11px;
+          background: rgba(127, 29, 29, 0.17);
+          color: #fca5a5;
+        }
+
+        .error-card div {
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+          flex: 1;
+        }
+
+        .error-card strong {
+          color: #fecaca;
+          font-size: 11px;
+        }
+
+        .error-card span {
+          font-size: 10px;
+        }
+
+        .error-card button {
+          border: 1px solid rgba(239, 68, 68, 0.25);
+          background: rgba(239, 68, 68, 0.08);
+          color: #fca5a5;
+          border-radius: 7px;
+          padding: 7px 10px;
+          cursor: pointer;
+          font-size: 10px;
+        }
+
+        .kpi-grid {
+          display: grid;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 12px;
+          margin-bottom: 14px;
+        }
+
+        .kpi-card {
+          position: relative;
+          min-height: 132px;
+          overflow: hidden;
+          padding: 15px 16px 14px;
+          border: 1px solid rgba(56, 100, 145, 0.22);
+          border-radius: 12px;
+          background: linear-gradient(145deg, rgba(14, 35, 58, 0.95), rgba(7, 23, 40, 0.95));
+          box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025);
+        }
+
+        .kpi-card::after {
+          content: '';
+          position: absolute;
+          width: 130px;
+          height: 130px;
+          right: -55px;
+          bottom: -75px;
+          border-radius: 50%;
+          background: currentColor;
+          opacity: 0.035;
+        }
+
+        .kpi-top {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 12px;
+        }
+
+        .kpi-icon {
+          display: grid;
+          place-items: center;
+          width: 35px;
+          height: 35px;
+          border-radius: 9px;
+          background: rgba(56, 189, 248, 0.1);
+          border: 1px solid rgba(56, 189, 248, 0.18);
+        }
+
+        .kpi-dot {
+          width: 6px;
+          height: 6px;
+          border-radius: 50%;
+          background: currentColor;
+          box-shadow: 0 0 9px currentColor;
+        }
+
+        .tone-cyan {
+          color: #38bdf8;
+        }
+
+        .tone-red {
+          color: #ef4444;
+        }
+
+        .tone-violet {
+          color: #a78bfa;
+        }
+
+        .tone-green {
+          color: #10b981;
+        }
+
+        .kpi-title {
+          color: #7c9abd;
+          font-size: 10px;
+          font-weight: 700;
+          margin-bottom: 4px;
+        }
+
+        .kpi-value {
+          color: #f8fafc;
+          font-size: clamp(18px, 1.8vw, 24px);
+          line-height: 1.1;
+          font-weight: 800;
+          letter-spacing: -0.025em;
+        }
+
+        .kpi-subtitle {
+          margin-top: 8px;
+          color: #64748b;
+          font-size: 9px;
+        }
+
+        .analysis-grid {
+          display: grid;
+          grid-template-columns: minmax(0, 1.65fr) minmax(320px, 0.85fr);
+          gap: 14px;
+          margin-bottom: 14px;
+        }
+
+        .panel {
+          overflow: hidden;
+        }
+
+        .panel-head {
+          display: flex;
+          justify-content: space-between;
+          align-items: flex-start;
+          gap: 15px;
+          padding: 17px 18px 14px;
+          border-bottom: 1px solid rgba(71, 108, 143, 0.13);
+        }
+
+        .panel-kicker {
+          font-size: 9px;
+          color: #38bdf8;
+        }
+
+        .panel-head h2 {
+          margin: 4px 0 3px;
+          font-size: 15px;
+          letter-spacing: -0.015em;
+        }
+
+        .panel-head p {
+          margin: 0;
+          color: #64748b;
+          font-size: 10px;
+        }
+
+        .panel-badge {
+          flex-shrink: 0;
+          padding: 6px 9px;
+          font-size: 9px;
+        }
+
+        .ranking-list {
+          padding: 7px 18px 15px;
+        }
+
+        .ranking-row {
+          display: flex;
+          gap: 11px;
+          align-items: center;
+          padding: 10px 0;
+          border-bottom: 1px solid rgba(71, 108, 143, 0.08);
+        }
+
+        .ranking-row:last-child {
+          border-bottom: 0;
+        }
+
+        .rank {
+          width: 26px;
+          flex: 0 0 26px;
+          color: #475569;
+          font-size: 10px;
+          font-weight: 800;
+        }
+
+        .top-rank {
+          color: #38bdf8;
+        }
+
+        .ranking-main {
+          min-width: 0;
+          flex: 1;
+        }
+
+        .ranking-label {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 15px;
+          margin-bottom: 6px;
+        }
+
+        .ranking-label > div:first-child {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          min-width: 0;
+        }
+
+        .agency-code {
+          display: inline-flex;
+          align-items: center;
+          height: 20px;
+          padding: 0 6px;
+          border-radius: 5px;
+          background: rgba(56, 189, 248, 0.08);
+          border: 1px solid rgba(56, 189, 248, 0.12);
+          color: #7dd3fc;
+          font-size: 8px;
+          font-weight: 800;
+        }
+
+        .ranking-label strong {
+          color: #dbeafe;
+          font-size: 10px;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+
+        .ranking-value {
+          display: flex;
+          align-items: baseline;
+          gap: 8px;
+          flex-shrink: 0;
+        }
+
+        .ranking-value strong {
+          color: #f8fafc;
+          font-size: 10px;
+        }
+
+        .ranking-value span {
+          color: #64748b;
+          font-size: 9px;
+        }
+
+        .progress-track {
+          height: 5px;
+          overflow: hidden;
+          border-radius: 99px;
+          background: rgba(30, 58, 83, 0.7);
+        }
+
+        .progress-fill {
+          height: 100%;
+          min-width: 4px;
+          border-radius: inherit;
+          background: linear-gradient(90deg, #0ea5e9, #38bdf8);
+          box-shadow: 0 0 10px rgba(56, 189, 248, 0.22);
+          transition: width 350ms ease;
+        }
+
+        .focus-list {
+          padding: 9px 18px 4px;
+        }
+
+        .focus-item {
+          display: flex;
+          gap: 11px;
+          padding: 12px 0;
+          border-bottom: 1px solid rgba(71, 108, 143, 0.1);
+        }
+
+        .focus-rank {
+          display: grid;
+          place-items: center;
+          width: 31px;
+          height: 31px;
+          flex: 0 0 31px;
+          border-radius: 8px;
+          color: #94a3b8;
+          background: rgba(71, 85, 105, 0.12);
+          border: 1px solid rgba(71, 85, 105, 0.15);
+          font-size: 10px;
+          font-weight: 900;
+        }
+
+        .rank-1 {
+          color: #fca5a5;
+          background: rgba(239, 68, 68, 0.1);
+          border-color: rgba(239, 68, 68, 0.18);
+        }
+
+        .rank-2 {
+          color: #fdba74;
+          background: rgba(249, 115, 22, 0.08);
+          border-color: rgba(249, 115, 22, 0.15);
+        }
+
+        .rank-3 {
+          color: #fde68a;
+          background: rgba(234, 179, 8, 0.07);
+          border-color: rgba(234, 179, 8, 0.13);
+        }
+
+        .focus-content {
+          min-width: 0;
+          flex: 1;
+        }
+
+        .focus-name {
+          display: flex;
+          align-items: center;
+          gap: 7px;
+        }
+
+        .focus-name span {
+          color: #38bdf8;
+          font-size: 8px;
+          font-weight: 800;
+        }
+
+        .focus-name strong {
+          color: #dbeafe;
+          font-size: 11px;
+        }
+
+        .focus-amount {
+          margin-top: 5px;
+          color: #f87171;
+          font-size: 17px;
+          font-weight: 800;
+        }
+
+        .focus-meta {
+          display: flex;
+          gap: 12px;
+          margin-top: 4px;
+          color: #64748b;
+          font-size: 9px;
+        }
+
+        .focus-note {
+          display: flex;
+          gap: 8px;
+          align-items: flex-start;
+          margin: 8px 18px 17px;
+          padding: 10px;
+          border-radius: 8px;
+          background: rgba(239, 68, 68, 0.055);
+          border: 1px solid rgba(239, 68, 68, 0.1);
+          color: #94a3b8;
+          font-size: 9px;
+          line-height: 1.45;
+        }
+
+        .focus-note svg {
+          color: #f87171;
+          flex: 0 0 auto;
+          margin-top: 1px;
+        }
+
+        .table-panel {
+          margin-bottom: 14px;
+        }
+
+        .table-head {
+          align-items: center;
+        }
+
+        .rows-counter {
+          color: #64748b;
+          border-color: rgba(71, 108, 143, 0.15);
+          background: rgba(15, 35, 57, 0.55);
+          font-weight: 600;
+          letter-spacing: 0;
+        }
+
+        .rows-counter span {
+          color: #cbd5e1;
+          font-weight: 800;
+        }
+
+        .table-scroll {
+          overflow-x: auto;
+        }
+
+        table {
+          width: 100%;
+          min-width: 930px;
+          border-collapse: collapse;
+        }
+
+        th {
+          height: 36px;
+          padding: 0 15px;
+          background: rgba(4, 18, 31, 0.48);
+          color: #64748b;
+          text-align: left;
+          font-size: 8px;
+          font-weight: 800;
+          letter-spacing: 0.09em;
+          text-transform: uppercase;
+          white-space: nowrap;
+        }
+
+        td {
+          padding: 12px 15px;
+          border-top: 1px solid rgba(71, 108, 143, 0.09);
+          color: #a8bad0;
+          font-size: 10px;
+          white-space: nowrap;
+        }
+
+        tbody tr {
+          transition: background 150ms ease;
+        }
+
+        tbody tr:hover {
+          background: rgba(56, 189, 248, 0.025);
+        }
+
+        .rank-col,
+        .rank-cell {
+          width: 48px;
+          color: #475569;
+          font-weight: 800;
+        }
+
+        .agency-cell {
+          display: flex;
+          align-items: center;
+          gap: 9px;
+        }
+
+        .agency-avatar {
+          display: grid;
+          place-items: center;
+          width: 31px;
+          height: 31px;
+          flex: 0 0 31px;
+          border-radius: 8px;
+          background: rgba(56, 189, 248, 0.08);
+          border: 1px solid rgba(56, 189, 248, 0.13);
+          color: #38bdf8;
+        }
+
+        .agency-cell > div {
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+        }
+
+        .agency-cell strong {
+          color: #dbeafe;
+          font-size: 10px;
+        }
+
+        .agency-cell span:not(.agency-avatar) {
+          color: #64748b;
+          font-size: 8px;
+          font-weight: 700;
+        }
+
+        .money-cell {
+          color: #cbd5e1;
+          font-variant-numeric: tabular-nums;
+        }
+
+        .danger-money {
+          color: #f87171;
+          font-weight: 800;
+        }
+
+        .rate-pill,
+        .situation {
+          display: inline-flex;
+          align-items: center;
+          gap: 5px;
+          border-radius: 999px;
+          padding: 5px 8px;
+          font-size: 8px;
+          font-weight: 800;
+        }
+
+        .rate-low {
+          color: #34d399;
+          background: rgba(16, 185, 129, 0.08);
+          border: 1px solid rgba(16, 185, 129, 0.12);
+        }
+
+        .rate-medium {
+          color: #fbbf24;
+          background: rgba(245, 158, 11, 0.08);
+          border: 1px solid rgba(245, 158, 11, 0.12);
+        }
+
+        .rate-high {
+          color: #f87171;
+          background: rgba(239, 68, 68, 0.08);
+          border: 1px solid rgba(239, 68, 68, 0.12);
+        }
+
+        .agents-cell {
+          display: inline-flex;
+          align-items: center;
+          gap: 5px;
+          color: #94a3b8;
+        }
+
+        .periods {
+          display: flex;
+          gap: 4px;
+        }
+
+        .periods span {
+          padding: 4px 6px;
+          border-radius: 5px;
+          background: rgba(71, 108, 143, 0.09);
+          color: #94a3b8;
+          font-size: 8px;
+        }
+
+        .periods .muted {
+          color: #475569;
+        }
+
+        .situation {
+          padding: 0;
+          border: 0;
+          background: transparent;
+          font-weight: 700;
+        }
+
+        .situation i {
+          width: 5px;
+          height: 5px;
+          border-radius: 50%;
+          background: currentColor;
+        }
+
+        .dg-note {
+          display: flex;
+          align-items: flex-start;
+          gap: 13px;
+          padding: 16px 18px;
+        }
+
+        .dg-note-icon {
+          display: grid;
+          place-items: center;
+          width: 38px;
+          height: 38px;
+          flex: 0 0 38px;
+          border-radius: 10px;
+          background: rgba(56, 189, 248, 0.08);
+          border: 1px solid rgba(56, 189, 248, 0.13);
+          color: #38bdf8;
+        }
+
+        .dg-note h3 {
+          margin: 4px 0 4px;
+          color: #dbeafe;
+          font-size: 12px;
+        }
+
+        .dg-note p {
+          margin: 0;
+          max-width: 920px;
+          color: #64748b;
+          font-size: 10px;
+          line-height: 1.55;
+        }
+
+        .source-line {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 7px;
+          margin-top: 13px;
+          color: #475569;
+          font-size: 9px;
+        }
+
+        .source-line code {
+          color: #64748b;
+          font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        }
+
+        .source-separator {
+          color: #334155;
+        }
+
+        .empty-state {
+          display: grid;
+          place-items: center;
+          min-height: 90px;
+          color: #64748b;
+          font-size: 10px;
+        }
+
+        @keyframes spin {
+          to {
+            transform: rotate(360deg);
+          }
+        }
+
+        @media (max-width: 1180px) {
+          .filters-card {
+            grid-template-columns: 1fr 1fr;
+          }
+
+          .filter-status {
+            justify-content: flex-start;
+          }
+
+          .kpi-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .analysis-grid {
+            grid-template-columns: 1fr;
+          }
+        }
+
+        @media (max-width: 760px) {
+          .page-shell {
+            padding: 16px 14px 32px;
+          }
+
+          .hero-title-row {
+            align-items: flex-start;
+            flex-direction: column;
+          }
+
+          .hero-actions {
+            width: 100%;
+            flex-wrap: wrap;
+          }
+
+          .filters-card,
+          .kpi-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .filter-status {
+            justify-content: flex-start;
+          }
+
+          .kpi-card {
+            min-height: 120px;
+          }
+        }
+      `}</style>
+    </main>
+  );
+}

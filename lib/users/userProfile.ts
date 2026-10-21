@@ -1,0 +1,599 @@
+import { supabaseAdmin } from '@/lib/supabase/admin';
+
+export const EMAIL_CHANGE_TTL_HOURS = 24;
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const PHONE_RE = /^[0-9+\-\s().]{6,20}$/;
+
+export interface UpdateProfileInput {
+  first_name?: string;
+  last_name?: string;
+  phone?: string | null;
+  job_title?: string | null;
+}
+
+/**
+ * UUID Supabase Auth / profiles.
+ *
+ * Le nouveau système utilise directement l'UUID.
+ * Le legacy_user_id est conservé uniquement pour compatibilité
+ * avec les anciennes parties de l'application.
+ */
+async function resolveProfileId(
+  userId: number | string
+): Promise<string | null> {
+  const value = String(userId).trim();
+
+  // UUID Supabase
+  const uuidRegex =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+  if (uuidRegex.test(value)) {
+    const { data, error } = await supabaseAdmin
+      .from('profiles')
+      .select('id')
+      .eq('id', value)
+      .maybeSingle();
+
+    if (error) {
+      throw error;
+    }
+
+    return data?.id ?? null;
+  }
+
+  // Ancien identifiant numérique
+  const legacyUserId = Number(value);
+
+  if (!Number.isInteger(legacyUserId)) {
+    return null;
+  }
+
+  const { data, error } = await supabaseAdmin
+    .from('profiles')
+    .select('id')
+    .eq('legacy_user_id', legacyUserId)
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+
+  return data?.id ?? null;
+}
+
+/**
+ * Récupère le profil applicatif complet.
+ *
+ * Source principale :
+ * profiles
+ *
+ * Compléments :
+ * roles
+ * agencies
+ */
+export async function getUserProfile(
+  userId: number | string
+) {
+  const profileId = await resolveProfileId(userId);
+
+  if (!profileId) {
+    return null;
+  }
+
+  const { data: profile, error: profileError } =
+    await supabaseAdmin
+      .from('profiles')
+      .select(`
+        id,
+        legacy_user_id,
+        first_name,
+        last_name,
+        display_name,
+        email,
+        pending_email,
+        email_verified_at,
+        phone,
+        job_title,
+        avatar,
+        status,
+        role_id,
+        agency_id,
+        department_id,
+        region_id,
+        center_id,
+        last_login_at,
+        created_at,
+        updated_at,
+        profile_updated_at
+      `)
+      .eq('id', profileId)
+      .maybeSingle();
+
+  if (profileError) {
+    throw profileError;
+  }
+
+  if (!profile) {
+    return null;
+  }
+
+  let role_code: string | null = null;
+  let role_name: string | null = null;
+
+  if (profile.role_id != null) {
+    const { data: role, error: roleError } =
+      await supabaseAdmin
+        .from('roles')
+        .select('code, name')
+        .eq('id', profile.role_id)
+        .maybeSingle();
+
+    if (roleError) {
+      throw roleError;
+    }
+
+    role_code = role?.code ?? null;
+    role_name = role?.name ?? null;
+  }
+
+  let agency_name: string | null = null;
+
+  if (profile.agency_id != null) {
+    const { data: agency, error: agencyError } =
+      await supabaseAdmin
+        .from('agencies')
+        .select('name')
+        .eq('id', profile.agency_id)
+        .maybeSingle();
+
+    if (agencyError) {
+      throw agencyError;
+    }
+
+    agency_name = agency?.name ?? null;
+  }
+
+  return {
+    id: profile.id,
+    legacy_user_id:
+      profile.legacy_user_id == null
+        ? null
+        : Number(profile.legacy_user_id),
+
+    first_name: profile.first_name,
+    last_name: profile.last_name,
+    display_name: profile.display_name,
+
+    email: profile.email,
+    pending_email: profile.pending_email,
+    email_verified_at: profile.email_verified_at,
+
+    phone: profile.phone,
+    job_title: profile.job_title,
+    avatar: profile.avatar,
+    status: profile.status,
+
+    role_id:
+      profile.role_id == null
+        ? null
+        : Number(profile.role_id),
+
+    role_code,
+    role_name,
+
+    agency_id:
+      profile.agency_id == null
+        ? null
+        : Number(profile.agency_id),
+
+    agency_name,
+
+    department_id:
+      profile.department_id == null
+        ? null
+        : Number(profile.department_id),
+
+    region_id:
+      profile.region_id == null
+        ? null
+        : Number(profile.region_id),
+
+    center_id:
+      profile.center_id == null
+        ? null
+        : Number(profile.center_id),
+
+    last_login_at: profile.last_login_at,
+    created_at: profile.created_at,
+    updated_at: profile.updated_at,
+    profile_updated_at: profile.profile_updated_at,
+  };
+}
+
+/**
+ * Met à jour uniquement les informations de profil.
+ *
+ * L'email n'est PAS modifié ici.
+ * Le changement d'email passe par Supabase Auth.
+ */
+export async function updateUserProfile(
+  userId: number | string,
+  input: UpdateProfileInput
+) {
+  const profileId = await resolveProfileId(userId);
+
+  if (!profileId) {
+    return {
+      ok: false as const,
+      reason: 'NOT_FOUND',
+    };
+  }
+
+  const current = await getUserProfile(profileId);
+
+  if (!current) {
+    return {
+      ok: false as const,
+      reason: 'NOT_FOUND',
+    };
+  }
+
+  const first_name =
+    input.first_name !== undefined
+      ? String(input.first_name).trim()
+      : current.first_name;
+
+  const last_name =
+    input.last_name !== undefined
+      ? String(input.last_name).trim()
+      : current.last_name;
+
+  if (!first_name || !last_name) {
+    return {
+      ok: false as const,
+      reason: 'INVALID_NAME',
+    };
+  }
+
+  if (
+    first_name.length > 100 ||
+    last_name.length > 100
+  ) {
+    return {
+      ok: false as const,
+      reason: 'INVALID_NAME',
+    };
+  }
+
+  const phone =
+    input.phone === null
+      ? null
+      : input.phone !== undefined &&
+          String(input.phone).trim()
+        ? String(input.phone).trim()
+        : current.phone;
+
+  const job_title =
+    input.job_title === null
+      ? null
+      : input.job_title !== undefined &&
+          String(input.job_title).trim()
+        ? String(input.job_title)
+            .trim()
+            .slice(0, 150)
+        : current.job_title;
+
+  if (phone && !PHONE_RE.test(phone)) {
+    return {
+      ok: false as const,
+      reason: 'INVALID_PHONE',
+    };
+  }
+
+  const display_name =
+    `${first_name} ${last_name}`.trim();
+
+  const { error } = await supabaseAdmin
+    .from('profiles')
+    .update({
+      first_name,
+      last_name,
+      display_name,
+      phone,
+      job_title,
+      profile_updated_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', profileId);
+
+  if (error) {
+    throw error;
+  }
+
+  const data = await getUserProfile(profileId);
+
+  return {
+    ok: true as const,
+    data,
+  };
+}
+
+/**
+ * Demande de changement d'email.
+ *
+ * Dans Supabase, le changement d'email est géré par Auth.
+ *
+ * Le flux recommandé est :
+ *
+ *   supabase.auth.admin.updateUserById(...)
+ *
+ * puis Supabase envoie les emails de confirmation
+ * selon la configuration du projet.
+ *
+ * Cette fonction conserve pending_email dans profiles
+ * pour que l'application puisse afficher l'état de la demande.
+ */
+/**
+ * Demande de changement d'adresse email.
+ *
+ * IMPORTANT :
+ * Cette fonction ne modifie PAS Supabase Auth.
+ *
+ * Elle effectue uniquement :
+ * - la résolution du profil ;
+ * - la validation de l'adresse ;
+ * - la vérification que l'email n'est pas déjà utilisé ;
+ * - la préparation de pendingEmail.
+ *
+ * Le changement réel dans Supabase Auth est effectué dans
+ * app/api/profile/change-email/route.ts avec le client
+ * Supabase lié à la session de l'utilisateur.
+ */
+export async function requestEmailChange(
+  userId: number | string,
+  newEmail: string
+) {
+  const profileId = await resolveProfileId(userId);
+
+  if (!profileId) {
+    return {
+      ok: false as const,
+      reason: 'NOT_FOUND',
+    };
+  }
+
+  const email = String(newEmail)
+    .trim()
+    .toLowerCase();
+
+  if (
+    !EMAIL_RE.test(email) ||
+    email.length > 254
+  ) {
+    return {
+      ok: false as const,
+      reason: 'INVALID_EMAIL',
+    };
+  }
+
+  const current = await getUserProfile(profileId);
+
+  if (!current) {
+    return {
+      ok: false as const,
+      reason: 'NOT_FOUND',
+    };
+  }
+
+  if (
+    email ===
+    String(current.email ?? '')
+      .trim()
+      .toLowerCase()
+  ) {
+    return {
+      ok: false as const,
+      reason: 'SAME_EMAIL',
+    };
+  }
+
+  /**
+   * Vérifier qu'aucun autre profil n'utilise déjà
+   * cet email ou ne l'attend comme pending_email.
+   */
+  const {
+    data: existingProfiles,
+    error: existingError,
+  } = await supabaseAdmin
+    .from('profiles')
+    .select('id, email, pending_email')
+    .or(
+      `email.ilike.${email},pending_email.ilike.${email}`
+    )
+    .neq('id', profileId)
+    .limit(1);
+
+  if (existingError) {
+    throw existingError;
+  }
+
+  if (existingProfiles?.length) {
+    return {
+      ok: false as const,
+      reason: 'EMAIL_IN_USE',
+    };
+  }
+
+  /**
+   * IMPORTANT :
+   *
+   * On ne fait PLUS :
+   *
+   * supabaseAdmin.auth.admin.updateUserById(...)
+   *
+   * Le changement Auth sera effectué par la route API
+   * avec le client de session :
+   *
+   * supabase.auth.updateUser({
+   *   email
+   * })
+   *
+   * Cela permet à Supabase d'envoyer l'email de
+   * confirmation du changement d'adresse.
+   */
+
+  return {
+    ok: true as const,
+    pendingEmail: email,
+  };
+}
+
+
+/**
+ * Confirmation du changement d'email.
+ *
+ * Avec Supabase Auth, le token contenu dans le lien
+ * de confirmation est traité par Supabase.
+ *
+ * Cette fonction est donc conservée pour compatibilité
+ * avec l'ancien appel applicatif, mais elle ne traite
+ * plus directement de token MySQL.
+ */
+export async function confirmEmailChange(
+  rawToken: string
+) {
+  const token = String(rawToken || '').trim();
+
+  if (!token) {
+    return {
+      ok: false as const,
+      reason: 'NO_TOKEN',
+    };
+  }
+
+  /**
+   * IMPORTANT :
+   * Le token de confirmation Supabase ne doit pas être
+   * vérifié en recherchant un hash dans une table locale.
+   *
+   * Le callback Supabase doit établir la session,
+   * puis synchroniser profiles.
+   *
+   * Cette fonction retourne donc un état explicite
+   * plutôt que de prétendre avoir validé un token.
+   */
+  return {
+    ok: false as const,
+    reason: 'SUPABASE_AUTH_CONFIRMATION_REQUIRED',
+  };
+}
+
+/**
+ * Change le mot de passe de l'utilisateur.
+ *
+ * Avec Supabase Auth :
+ *
+ * 1. On récupère l'utilisateur Auth.
+ * 2. On vérifie son mot de passe actuel avec signInWithPassword.
+ * 3. On modifie ensuite le mot de passe via Admin API.
+ *
+ * Les sessions Auth sont gérées par Supabase.
+ */
+export async function changePassword(
+  userId: number | string,
+  currentPassword: string,
+  newPassword: string,
+  _excludeSessionHash?: string
+) {
+  const profileId = await resolveProfileId(userId);
+
+  if (!profileId) {
+    return {
+      ok: false as const,
+      reason: 'NOT_FOUND',
+    };
+  }
+
+  const { data: authUser, error: authUserError } =
+    await supabaseAdmin.auth.admin.getUserById(
+      profileId
+    );
+
+  if (authUserError) {
+    throw authUserError;
+  }
+
+  if (!authUser.user) {
+    return {
+      ok: false as const,
+      reason: 'NOT_FOUND',
+    };
+  }
+
+  const email = authUser.user.email;
+
+  if (!email) {
+    return {
+      ok: false as const,
+      reason: 'NO_EMAIL',
+    };
+  }
+
+  const current = String(currentPassword || '');
+  const next = String(newPassword || '');
+
+  if (next.length < 8) {
+    return {
+      ok: false as const,
+      reason: 'WEAK_PASSWORD',
+    };
+  }
+
+  if (next === current) {
+    return {
+      ok: false as const,
+      reason: 'SAME_PASSWORD',
+    };
+  }
+
+  /**
+   * Vérification du mot de passe actuel.
+   *
+   * IMPORTANT :
+   * Cette opération utilise le client Auth avec
+   * l'email de l'utilisateur.
+   */
+  const { error: verifyError } =
+    await supabaseAdmin.auth.signInWithPassword({
+      email,
+      password: current,
+    });
+
+  if (verifyError) {
+    return {
+      ok: false as const,
+      reason: 'BAD_CURRENT',
+    };
+  }
+
+  /**
+   * Modification du mot de passe.
+   */
+  const { error: updateError } =
+    await supabaseAdmin.auth.admin.updateUserById(
+      profileId,
+      {
+        password: next,
+      }
+    );
+
+  if (updateError) {
+    throw updateError;
+  }
+
+  
+  return {
+    ok: true as const,
+  };
+}

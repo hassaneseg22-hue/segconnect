@@ -1,0 +1,32 @@
+SEG CONNECT — RÉSEAU TERRITORIAL KALOUM
+
+Cette version respecte le design de départ de /territoire :
+- subpage-header
+- subpage-kpi-grid
+- kpi-card / kpi-header / kpi-title-value / kpi-foot-row
+- dashboard-card
+- card-header-flex
+- badge-pill
+- variables CSS existantes
+
+Route :
+/territoire/agences/kaloum
+
+Fichier page :
+app/territoire/agences/[agency]/page.tsx
+
+Document :
+public/documents/aep/kaloum.pdf
+
+Installation :
+1) sauvegarder l'ancien dossier si nécessaire
+2) copier page.tsx et kaloum.pdf
+3) tsc --noEmit
+4) npm run build
+5) pm2 restart seg-connect --update-env
+
+IMPORTANT :
+La page est générique pour [agency], mais seules les données officielles de
+Kaloum sont configurées : 461 conduites, 1 réservoir, 1 agence,
+06/10/2026, échelle 1 : 8 200, source SIG SEG.
+Aucune donnée SIG vectorielle fictive n'est créée à partir du PDF.

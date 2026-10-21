@@ -1,0 +1,19 @@
+import { NextResponse, type NextRequest } from 'next/server';
+import { SESSION_COOKIE, revokeServerSession } from '@/lib/auth/session';
+import { createAuditLog } from '@/lib/auth/audit';
+import { getCurrentUser } from '@/lib/auth/auth';
+
+export async function POST(req: NextRequest) {
+  const store = req.cookies;
+  const raw = store.get(SESSION_COOKIE)?.value;
+  const user = await getCurrentUser();
+  if (raw) await revokeServerSession(raw);
+  await createAuditLog({
+    userId: user?.id ?? null,
+    action: 'LOGOUT',
+    description: `Déconnexion`,
+  });
+  const res = NextResponse.json({ ok: true });
+  res.cookies.set(SESSION_COOKIE, '', { path: '/', maxAge: 0, httpOnly: true, sameSite: 'lax' });
+  return res;
+}

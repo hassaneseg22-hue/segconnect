@@ -1,0 +1,314 @@
+import { NextResponse, type NextRequest } from 'next/server';
+
+import {
+  requireAuth,
+  authErrorResponse,
+} from '@/lib/auth/auth';
+
+import { createAuditLog } from '@/lib/auth/audit';
+
+import { requestEmailChange } from '@/lib/users/userProfile';
+
+import { supabaseAdmin } from '@/lib/supabase/admin';
+
+import { createSupabaseServerClient } from '@/lib/supabase/server';
+
+/**
+ * POST /api/profile/change-email
+ *
+ * Demande de changement d'adresse email.
+ *
+ * Le changement réel est effectué par Supabase Auth avec
+ * le client lié à la session de l'utilisateur.
+ *
+ * Supabase envoie ensuite l'email de confirmation.
+ */
+export async function POST(req: NextRequest) {
+  let body: { email?: unknown };
+
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: 'VALIDATION_ERROR',
+      },
+      { status: 422 }
+    );
+  }
+
+  let user: Awaited<ReturnType<typeof requireAuth>>;
+
+  try {
+    user = await requireAuth();
+  } catch (err) {
+    return authErrorResponse(err);
+  }
+
+  const ip =
+    req.headers
+      .get('x-forwarded-for')
+      ?.split(',')[0]
+      ?.trim() || null;
+
+  const userAgent = req.headers.get('user-agent');
+
+  const newEmail = String(body.email ?? '')
+    .trim()
+    .toLowerCase();
+
+  try {
+    /*
+     * Validation de l'adresse et vérification qu'elle
+     * n'est pas déjà utilisée par un autre profil.
+     */
+    const result = await requestEmailChange(
+      user.id,
+      newEmail
+    );
+
+    if (!result.ok) {
+      if (result.reason === 'NOT_FOUND') {
+        return NextResponse.json(
+          {
+            ok: false,
+            error: 'NOT_FOUND',
+          },
+          { status: 404 }
+        );
+      }
+
+      if (result.reason === 'EMAIL_IN_USE') {
+        return NextResponse.json(
+          {
+            ok: false,
+            error: 'EMAIL_IN_USE',
+            message:
+              'Cet email est déjà utilisé par un autre compte.',
+          },
+          { status: 409 }
+        );
+      }
+
+      return NextResponse.json(
+        {
+          ok: false,
+          error: result.reason,
+        },
+        { status: 422 }
+      );
+    }
+
+    /*
+     * IMPORTANT :
+     *
+     * Ici nous utilisons le client Supabase associé
+     * à la session de l'utilisateur.
+     *
+     * Nous n'utilisons PAS :
+     *
+     * supabaseAdmin.auth.admin.updateUserById()
+     *
+     * afin de conserver le parcours normal de confirmation
+     * de changement d'email de Supabase Auth.
+     */
+    const supabase =
+      await createSupabaseServerClient();
+
+const siteUrl =
+      process.env.NEXT_PUBLIC_SITE_URL ||
+      'https://connect.seg.gn';
+
+    const emailRedirectTo =
+      `${siteUrl.replace(/\/$/, '')}/auth/callback?type=email_change`;
+
+    const { error: authError } =
+      await supabase.auth.updateUser(
+        { email: result.pendingEmail },
+        {
+          emailRedirectTo,
+        }
+      );
+
+    if (authError) {
+      console.error(
+        '[change-email] Supabase Auth:',
+        authError
+      );
+
+      const message =
+        authError.message.toLowerCase();
+
+      if (
+        message.includes('already') ||
+        message.includes('registered') ||
+        message.includes('exists')
+      ) {
+        return NextResponse.json(
+          {
+            ok: false,
+            error: 'EMAIL_IN_USE',
+            message:
+              'Cet email est déjà utilisé par un autre compte.',
+          },
+          { status: 409 }
+        );
+      }
+
+      return NextResponse.json(
+        {
+          ok: false,
+          error: 'EMAIL_CHANGE_FAILED',
+          message: authError.message,
+        },
+        { status: 400 }
+      );
+    }
+
+    /*
+     * La demande est maintenant enregistrée côté
+     * Supabase Auth.
+     *
+     * On conserve pending_email dans notre profil
+     * jusqu'à la confirmation effective.
+     */
+    const { error: profileError } =
+      await supabaseAdmin
+        .from('profiles')
+        .update({
+          pending_email: result.pendingEmail,
+          updated_at: new Date().toISOString(),
+          profile_updated_at:
+            new Date().toISOString(),
+        })
+        .eq('id', user.id);
+
+    if (profileError) {
+      console.error(
+        '[change-email] pending_email:',
+        profileError
+      );
+
+      return NextResponse.json(
+        {
+          ok: false,
+          error: 'PROFILE_UPDATE_FAILED',
+        },
+        { status: 500 }
+      );
+    }
+
+    /*
+     * Audit.
+     */
+    await createAuditLog({
+      userId: user.id,
+      action: 'EMAIL_CHANGE_REQUESTED',
+      targetType: 'USER',
+      targetId: user.id,
+      description:
+        "Demande de changement d'adresse email",
+      metadata: {
+        new_email: result.pendingEmail,
+      },
+      ip,
+      userAgent,
+      result: 'SUCCESS',
+    });
+
+    return NextResponse.json({
+      ok: true,
+      data: {
+        pendingEmail: result.pendingEmail,
+        confirmationRequired: true,
+      },
+      message:
+        'Un email de confirmation a été envoyé à la nouvelle adresse.',
+    });
+  } catch (error) {
+    console.error(
+      '[change-email] Erreur:',
+      error
+    );
+
+    return NextResponse.json(
+      {
+        ok: false,
+        error: 'INTERNAL_SERVER_ERROR',
+      },
+      { status: 500 }
+    );
+  }
+}
+
+/**
+ * DELETE /api/profile/change-email
+ *
+ * Annule une demande de changement d'email
+ * enregistrée dans le profil.
+ */
+export async function DELETE(req: NextRequest) {
+  let user: Awaited<ReturnType<typeof requireAuth>>;
+
+  try {
+    user = await requireAuth();
+  } catch (err) {
+    return authErrorResponse(err);
+  }
+
+  const ip =
+    req.headers
+      .get('x-forwarded-for')
+      ?.split(',')[0]
+      ?.trim() || null;
+
+  const userAgent =
+    req.headers.get('user-agent');
+
+  try {
+    const { error } =
+      await supabaseAdmin
+        .from('profiles')
+        .update({
+          pending_email: null,
+          updated_at: new Date().toISOString(),
+          profile_updated_at:
+            new Date().toISOString(),
+        })
+        .eq('id', user.id);
+
+    if (error) {
+      throw error;
+    }
+
+    await createAuditLog({
+      userId: user.id,
+      action: 'EMAIL_CHANGE_CANCELLED',
+      targetType: 'USER',
+      targetId: user.id,
+      description:
+        "Annulation d'une demande de changement d'email",
+      ip,
+      userAgent,
+      result: 'SUCCESS',
+    });
+
+    return NextResponse.json({
+      ok: true,
+    });
+  } catch (error) {
+    console.error(
+      '[change-email/delete] Erreur:',
+      error
+    );
+
+    return NextResponse.json(
+      {
+        ok: false,
+        error: 'INTERNAL_SERVER_ERROR',
+      },
+      { status: 500 }
+    );
+  }
+}

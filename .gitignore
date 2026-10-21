@@ -1,0 +1,22 @@
+node_modules
+.next
+.env*
+!.env.example
+
+# Secrets et environnement
+.env
+.env.*
+!.env.example
+
+# Dépendances et build
+node_modules/
+.next/
+out/
+dist/
+
+# Logs
+*.log
+
+# Sauvegardes locales
+*.backup-*
+*.bak-*
