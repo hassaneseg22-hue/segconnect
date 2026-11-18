@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import SectionAnomaliesDG from '@/components/qualite/SectionAnomaliesDG';
 import {
   ArrowLeft,
   TriangleAlert,
@@ -215,6 +216,8 @@ export default function ImportQualityPage() {
       )}
 
       {/* Résumé qualité */}
+      <SectionAnomaliesDG />
+
       <div className="dashboard-card">
         <div className="card-header-flex">
           <div>

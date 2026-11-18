@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef, type FormEvent } from 'react';
 import { Loader2, Save, LogOut, KeyRound, Upload, Trash2, Mail, ShieldCheck, User as UserIcon, Phone } from 'lucide-react';
 import { useAuth } from '@/components/auth/AuthProvider';
+import { BusinessCard, fmtPhone } from '@/components/BusinessCard';
 
 interface ProfileData {
   id: number;
@@ -239,32 +240,25 @@ export default function ProfilePage() {
 
   const data = profile;
   if (!data) return null;
+  const isDg = String(data.roleCode || '').toUpperCase() === 'SUPER_ADMIN';
 
   return (
-    <div style={{ maxWidth: 720 }}>
-      <h2 className="users-title" style={{ marginBottom: 16 }}>Mon profil</h2>
+    <div className="pf-page">
+      <div className="pf-head">
+        <h2 className="users-title">Mon profil</h2>
+        <p>Gérez vos informations personnelles, votre photo et la sécurité de votre compte.</p>
+      </div>
 
-      {/* ---------- Carte identité ---------- */}
-      <div className="users-card profile-card" style={{ gap: 18 }}>
-        <div style={{ position: 'relative' }}>
-          <div
-            className="profile-avatar-lg"
-            style={{
-              background: avatarSafe ? 'transparent' : 'linear-gradient(135deg, #1e3a5f, #0f2038)',
-              color: '#38bdf8',
-              overflow: 'hidden',
-            }}
-          >
-            {avatarSafe ? <img src={avatarSafe} alt="Avatar" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 14 }} /> : (initials || 'DG')}
+      <section className="pf-hero">
+        <div className="pf-avatar-wrap">
+          <div className="pf-avatar">
+            <span className="pf-avatar-spin" aria-hidden="true" />
+            <div className="pf-avatar-img" style={{ background: avatarSafe ? 'transparent' : 'linear-gradient(135deg, #1e3a5f, #0f2038)' }}>
+              {avatarSafe ? <img src={avatarSafe} alt="Avatar" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : (initials || 'DG')}
+            </div>
           </div>
-          <div style={{ position: 'absolute', bottom: -6, right: -6, display: 'flex', gap: 6 }}>
-            <button
-              type="button"
-              title="Changer la photo"
-              onClick={() => fileRef.current?.click()}
-              disabled={avatarBusy}
-              style={styles.iconBtn}
-            >
+          <div className="pf-avatar-actions">
+            <button type="button" title="Changer la photo" onClick={() => fileRef.current?.click()} disabled={avatarBusy} style={styles.iconBtn}>
               <Upload size={13} />
             </button>
             {avatarSafe && (
@@ -281,38 +275,49 @@ export default function ProfilePage() {
             onChange={(e) => onUploadAvatar(e.target.files?.[0])}
           />
         </div>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ color: 'var(--text-strong)', fontSize: 18, fontWeight: 700 }}>{data.jobTitle || data.roleName || data.displayName}</div>
-          <div style={{ display: 'flex', gap: 24, marginTop: 6, flexWrap: 'wrap' }}>
-            <div>
-              <div style={{ color: 'var(--text-dim)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 700, marginBottom: 2 }}>Prénom</div>
-              <div style={{ color: 'var(--text-strong)', fontSize: 13.5, fontWeight: 600 }}>{data.firstName || '—'}</div>
-            </div>
-            <div>
-              <div style={{ color: 'var(--text-dim)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 700, marginBottom: 2 }}>Nom</div>
-              <div style={{ color: 'var(--text-strong)', fontSize: 13.5, fontWeight: 600 }}>{data.lastName || '—'}</div>
-            </div>
+
+        <div className="pf-hero-body">
+          <h3 className="pf-name">{[data.firstName, data.lastName].filter(Boolean).join(' ') || data.displayName}</h3>
+          <div className="pf-title"><span className="pf-flag" />{data.jobTitle || data.roleName || 'SEG Guinée'}</div>
+          <div className="pf-meta">
+            <span><Mail size={13} />{isDg ? 'dg@segguinee.com' : data.email}</span>
+            {data.pendingEmail && <span style={{ color: '#f59e0b', fontWeight: 600 }}>en attente : {data.pendingEmail}</span>}
+            {(isDg || (data.phone && data.phone !== 'null')) && <span><Phone size={13} />{isDg ? fmtPhone('+224626060657') : fmtPhone(String(data.phone))}</span>}
           </div>
-          <div style={{ color: 'var(--text-muted)', fontSize: 12.5, marginTop: 6 }}>
-            <Mail size={12} style={{ verticalAlign: -2, marginRight: 4 }} />{data.email}
-            {data.pendingEmail && (
-              <span style={{ marginLeft: 6, color: '#f59e0b', fontWeight: 600 }}>(en attente : {data.pendingEmail})</span>
-            )}
-          </div>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
+          <div className="pf-badges">
             {data.roleName && data.roleName !== (data.jobTitle || data.roleName) && (
               <span className={`role-badge role-${data.roleCode?.toLowerCase()}`}>{data.roleName}</span>
             )}
             {data.agencyName && <span className="role-badge">{data.agencyName}</span>}
           </div>
-          <div style={{ color: 'var(--text-dim)', fontSize: 11.5, marginTop: 8 }}>
-            Membre depuis le {formatDate(data.createdAt)} · Dernière connexion {formatDate(data.lastLoginAt)}
+        </div>
+
+        <div className="pf-stats">
+          <div className="pf-stat"><span>Membre depuis</span><b>{formatDate(data.createdAt)}</b></div>
+          <div className="pf-stat"><span>Dernière connexion</span><b>{formatDate(data.lastLoginAt)}</b></div>
+          <div className="pf-stat">
+            <span>Statut</span>
+            <b className="pf-status"><i />{['active', 'actif'].includes((data.status || '').toLowerCase()) ? 'Actif' : (data.status || '—')}</b>
           </div>
         </div>
-      </div>
+      </section>
 
       {avatarError && <div className="db-error-banner" style={{ marginTop: 12 }}>{avatarError}</div>}
 
+      <div style={{ marginTop: 16 }}>
+        <BusinessCard
+          firstName={data.firstName}
+          lastName={data.lastName}
+          displayName={data.displayName}
+          jobTitle={data.jobTitle || data.roleName}
+          email={isDg ? 'dg@segguinee.com' : data.email}
+          phone={isDg ? '+224626060657' : (data.phone && data.phone !== 'null' ? data.phone : null)}
+          avatar={avatarSafe || ''}
+          initials={initials}
+        />
+      </div>
+      <div className="pf-grid">
+      <div className="pf-col">
       {/* ---------- Informations de contact ---------- */}
       <form onSubmit={onSaveInfo} className="users-card" style={{ marginTop: 14 }}>
         <h3 className="section-title"><UserIcon size={15} style={{ verticalAlign: -2, marginRight: 6 }} />Informations de contact</h3>
@@ -386,6 +391,8 @@ export default function ProfilePage() {
         )}
       </div>
 
+      </div>
+      <div className="pf-col">
       {/* ---------- Sécurité ---------- */}
       <div className="users-card" style={{ marginTop: 14 }}>
         <h3 className="section-title"><KeyRound size={15} style={{ verticalAlign: -2, marginRight: 6 }} />Sécurité</h3>
@@ -410,6 +417,32 @@ export default function ProfilePage() {
             </button>
           </div>
         </form>
+      </div>
+
+      {/* ---------- État du compte ---------- */}
+      <div className="users-card">
+        <h3 className="section-title"><ShieldCheck size={15} style={{ verticalAlign: -2, marginRight: 6 }} />État du compte</h3>
+        <ul className="pf-checks">
+          <li className={data.emailVerifiedAt ? 'ok' : 'warn'}>
+            <span className="pf-dot" />
+            <div><b>Adresse e-mail</b><small>{data.emailVerifiedAt ? 'Vérifiée le ' + formatDate(data.emailVerifiedAt) : 'Non vérifiée'}</small></div>
+          </li>
+          <li className="ok">
+            <span className="pf-dot" />
+            <div><b>Dernière connexion</b><small>{formatDate(data.lastLoginAt)}</small></div>
+          </li>
+          <li className="ok">
+            <span className="pf-dot" />
+            <div><b>Profil mis à jour</b><small>{formatDate(data.profileUpdatedAt || data.createdAt)}</small></div>
+          </li>
+          <li className="ok">
+            <span className="pf-dot" />
+            <div><b>Mot de passe</b><small>8 caractères minimum, à renouveler régulièrement</small></div>
+          </li>
+        </ul>
+        <div className="pf-tip">Ne partagez jamais votre mot de passe et déconnectez-vous sur les appareils partagés.</div>
+      </div>
+      </div>
       </div>
     </div>
   );

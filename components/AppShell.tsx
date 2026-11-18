@@ -5,6 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { Sidebar } from '@/components/Sidebar';
 import { Header } from '@/components/Header';
 import { NewsTicker } from '@/components/NewsTicker';
+import { SegeGlobal } from '@/components/journal/SegeGlobal';
 import { useAuth } from '@/components/auth/AuthProvider';
 
 const PUBLIC_AUTH_PATHS = ['/login', '/403', '/forgot-password', '/reset-password', '/activate-account'];
@@ -55,6 +56,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <main className="dashboard-content">{children}</main>
       </div>
       <NewsTicker />
+      <SegeGlobal />
     </div>
   );
 }

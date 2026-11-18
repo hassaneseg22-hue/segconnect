@@ -26,14 +26,56 @@ import {
   FileSpreadsheet,
   ShieldCheck,
   FolderOpen,
-  Truck
+  Truck,
+  Newspaper,
+  Target
 } from 'lucide-react';
 import { useAuth } from '@/components/auth/AuthProvider';
+import { NewFeatureBubble } from '@/components/NewFeatureBubble';
+
+// Bulles « Nouveau » du menu latéral : changer l'id fait réapparaître la bulle.
+const NOUVEAUTES_MENU: Record<string, { id: string; title: string; lines: string[] }> = {
+  '/journal': { id: 'menu-journal-dg', title: 'Nouveau : Journal du DG', lines: ['Problèmes en cours, carte de Guinée animée, lecture à voix haute.', 'L’assistant répond sur toutes les données du dashboard, dont les RH.'] },
+  '/kpi/realisation-production': { id: 'menu-realisation-production-2026', title: 'Nouveau : Réalisation Production', lines: ['Taux de réalisation de janvier à octobre 2026 pour les 44 sites (DPR).'] },
+  '/exploitation': { id: 'menu-exploitation-realisation-2026', title: 'Mis à jour', lines: ['Nouveau bloc : taux de réalisation des sites du Grand Conakry.'] },
+  '/vue-nationale': { id: 'menu-vue-nationale-realisation-2026', title: 'Mis à jour', lines: ['Nouveau bloc : taux de réalisation de la production nationale.'] },
+  '/': {
+    id: 'menu-dashboard-2026-11',
+    title: 'Tableau de bord mis à jour',
+    lines: ['Conakry : chiffres jusqu’à septembre 2026.', 'Intérieur : juin 2026 corrigé.'],
+  },
+  '/tableau-technique': {
+    id: 'menu-tableau-technique-2026-11',
+    title: 'Tableau de bord technique',
+    lines: ['Nouvelle section : facturation et chiffre d’affaires 2026.'],
+  },
+  '/import/quality': {
+    id: 'menu-qualite-2026-11',
+    title: 'Qualité des Données',
+    lines: ['Nouvelle section : anomalies détectées et corrections appliquées.'],
+  },
+  '/stocks': {
+    id: 'menu-stocks-2026-11',
+    title: 'Stocks & Magasins',
+    lines: ['Inventaire des magasins : valeur des stocks, ruptures et articles obsolètes.'],
+  },
+  '/rh': {
+    id: 'menu-rh-2026-11-comparaison',
+    title: 'Ressources humaines',
+    lines: ['Corrigé : la comparaison avec la liste des centres de l’intérieur.', 'Nouveau : les besoins en personnel des DR, présentés centre par centre.'],
+  },
+  '/centres': {
+    id: 'centres-dr-nzerekore-2026-11',
+    title: 'Centres de l’intérieur',
+    lines: ['Nouveau : la situation de la DR N’Zérékoré (problèmes techniques, produits chimiques, carburant, besoins).'],
+  },
+};
 
 const menuItems: { href: string; label: string; icon: any; permission: string }[] = [
   { href: '/', label: 'Tableau de bord', icon: LayoutDashboard, permission: 'dashboard.view' },
   { href: '/tableau-technique', label: 'Tableau de bord technique', icon: Gauge, permission: 'dashboard.view' },
   { href: '/notifications', label: 'Centre de Notifications', icon: Bell, permission: 'notifications.view' },
+  { href: '/journal', label: 'Journal du DG', icon: Newspaper, permission: 'journal.view' },
   { href: '/import', label: 'Import des Données', icon: FileSpreadsheet, permission: 'imports.view' },
   { href: '/import/quality', label: 'Qualité des Données', icon: ShieldCheck, permission: 'imports.view' },
   { href: '/vue-nationale', label: 'Vue Nationale', icon: Globe, permission: 'national.view' },
@@ -42,7 +84,9 @@ const menuItems: { href: string; label: string; icon: any; permission: string }[
   { href: '/agents', label: 'Agents & Équipes', icon: Users, permission: 'agents.view' },
   { href: '/missions', label: 'Missions', icon: ClipboardList, permission: 'missions.view' },
   { href: '/incidents', label: 'Incidents & Signalements', icon: AlertTriangle, permission: 'incidents.view' },
+  { href: '/centres', label: "Centres de l'intérieur", icon: AlertOctagon, permission: 'centres.view' },
   { href: '/exploitation', label: 'Production & Réservoirs', icon: Droplets, permission: 'production.view' },
+  { href: '/kpi/realisation-production', label: 'Réalisation Production', icon: Target, permission: 'production.view' },
   { href: '/reseau', label: 'Réseau & Fuites', icon: Network, permission: 'network.view' },
   { href: '/compteurs', label: 'Compteurs', icon: Gauge, permission: 'meters.view' },
   { href: '/clients', label: 'Clients & Réclamations', icon: MessageSquare, permission: 'clients.view' },
@@ -89,7 +133,7 @@ export function Sidebar() {
           const Icon = item.icon;
           const isActive = pathname === item.href || (item.href !== '/' && pathname.startsWith(item.href)) ||
             (item.href === '/import' && (pathname.startsWith('/import/') && !pathname.startsWith('/import/quality')));
-          return (
+          const link = (
             <Link
               key={item.label}
               href={item.href}
@@ -99,6 +143,18 @@ export function Sidebar() {
               <span>{item.label}</span>
             </Link>
           );
+          const nouveaute = NOUVEAUTES_MENU[item.href];
+          return nouveaute ? (
+            <NewFeatureBubble
+              key={item.label}
+              id={nouveaute.id}
+              side
+              title={nouveaute.title}
+              lines={nouveaute.lines}
+            >
+              {link}
+            </NewFeatureBubble>
+          ) : link;
         })}
 
         {visibleAdmin.length > 0 && (

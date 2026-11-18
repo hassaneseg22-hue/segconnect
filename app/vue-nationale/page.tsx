@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Droplets,
   Waves,
@@ -21,6 +21,10 @@ import {
   CloudOff
 } from 'lucide-react';
 import Link from 'next/link';
+import { useCentresUrgents } from '@/components/CentresLayer';
+import { NewFeatureBubble } from '@/components/NewFeatureBubble';
+import { RealisationResume } from '@/components/production/RealisationResume';
+import { SituationDuJour, NationalExtras, useNationalExtras } from '@/components/NationalExtras';
 import { num, gnf, pct } from '@/lib/format';
 import { useClientTypes } from '@/lib/use-overview';
 import { guineaRegions } from '@/lib/guinea-map-data';
@@ -48,6 +52,18 @@ function gnfCompact(value: number) {
 }
 
 const MONTHS = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Juin', 'Juil', 'Août', 'Sep', 'Oct', 'Nov', 'Déc'];
+const CURRENT_YEAR = new Date().getFullYear();
+const yearOptions = [CURRENT_YEAR, CURRENT_YEAR - 1, CURRENT_YEAR - 2];
+
+const normTxt = (t: string) => t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+// Rattachement géographique des agences à leur région administrative
+const AGENCY_REGION: Record<string, string> = {
+  yimbaya: 'conakry', matoto: 'conakry', kountia: 'conakry', wanindara: 'conakry', cimenterie: 'conakry',
+  ratoma: 'conakry', dixinn: 'conakry', kaloum: 'conakry', matam: 'conakry',
+  coyah: 'kindia', dubreka: 'kindia'
+};
+const CENTRE_COLOR: Record<string, string> = { arret: '#ef4444', perturbe: '#f59e0b', en_cours: '#38bdf8' };
+const CENTRE_LABEL: Record<string, string> = { arret: 'À l’arrêt', perturbe: 'Perturbé', en_cours: 'Réparation en cours' };
 
 function statusOf(value: number, ok: number, warn: number) {
   if (value >= ok) return { dot: '🟢', color: '#10b981', label: 'Performance normale' };
@@ -57,8 +73,10 @@ function statusOf(value: number, ok: number, warn: number) {
 
 export default function VueNationalePage() {
   const clientTypes = useClientTypes();
-  const [year, setYear] = useState(2026);
-  const [compareYear, setCompareYear] = useState(2025);
+  const centres = useCentresUrgents();
+  const extras = useNationalExtras();
+  const [year, setYear] = useState(CURRENT_YEAR);
+  const [compareYear, setCompareYear] = useState(CURRENT_YEAR - 1);
   const [clientType, setClientType] = useState('');
   const [metric, setMetric] = useState<'production' | 'consumption' | 'billing' | 'ca' | 'recovery' | 'yield'>('production');
   const [loading, setLoading] = useState(true);
@@ -67,27 +85,73 @@ export default function VueNationalePage() {
   const [prev, setPrev] = useState<Overview>(null);
 
   const [activeRegion, setActiveRegion] = useState<string | null>(null);
+  const [hoverRegion, setHoverRegion] = useState<string | null>(null);
+  const [activeCentre, setActiveCentre] = useState<string | null>(null);
+  const svgRef = useRef<SVGSVGElement>(null);
+  const [pin, setPin] = useState<{ x: number; y: number } | null>(null);
+
+  // Pin au centre de la région touchée (position réelle mesurée sur le tracé)
+  useEffect(() => {
+    if (!activeRegion || !svgRef.current) { setPin(null); return; }
+    const el = svgRef.current.querySelector(`[data-rid="${activeRegion}"]`) as SVGGraphicsElement | null;
+    if (!el) { setPin(null); return; }
+    const b = el.getBBox();
+    setPin({ x: b.x + b.width / 2, y: b.y + b.height / 2 });
+  }, [activeRegion]);
   const [activeDrill, setActiveDrill] = useState<{ level: string; name: string } | null>(null);
   const [sortKey, setSortKey] = useState<'performance' | 'production' | 'recovery' | 'yield' | 'ca'>('performance');
 
-  // Load both years in parallel
+  // Exercice en cours + année de comparaison sur les MÊMES mois, série par série
   useEffect(() => {
-    const c1 = new AbortController();
-    const c2 = new AbortController();
+    const ctrl = new AbortController();
     setLoading(true);
     setError('');
-    const p1 = fetch(`/api/overview?year=${year}${clientType ? `&clientType=${encodeURIComponent(clientType)}` : ''}`, { signal: c1.signal, cache: 'no-store' }).then(r => r.json());
-    const p2 = fetch(`/api/overview?year=${compareYear}${clientType ? `&clientType=${encodeURIComponent(clientType)}` : ''}`, { signal: c2.signal, cache: 'no-store' }).then(r => r.json());
-    Promise.all([p1, p2])
-      .then(([j1, j2]) => {
-        if (!j1.ok) throw new Error(j1.error || 'Connexion MySQL impossible');
-        if (!j2.ok) throw new Error(j2.error || 'Connexion MySQL impossible');
+    const ct = clientType ? `&clientType=${encodeURIComponent(clientType)}` : '';
+    const q = (y: number, to?: string | null) =>
+      fetch(`/api/overview?year=${y}${to ? `&from=${y}-01-01&to=${to}` : ''}${ct}`, { signal: ctrl.signal, cache: 'no-store' }).then((r) => r.json());
+
+    (async () => {
+      try {
+        const j1 = await q(year);
+        if (!j1.ok) throw new Error(j1.error || 'Connexion aux données impossible');
+        const kc = j1.data?.kpis || {};
+        const last = (arr?: string[]) => (arr && arr.length ? arr[arr.length - 1] : null);
+        const toFor = (m: string | null) => {
+          if (!m) return null;
+          const mm = Number(m.slice(5, 7));
+          const lastDay = new Date(compareYear, mm, 0).getDate();
+          return `${compareYear}-${String(mm).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+        };
+        const tTech = toFor(last(kc.technicalMonths));
+        const tFac = toFor(last(kc.facturationMonths));
+        const tRec = toFor(last(kc.recoveryMonths));
+        const uniq = Array.from(new Set([tTech, tFac, tRec]));
+        const results = await Promise.all(uniq.map((to) => q(compareYear, to)));
+        const byTo = new Map<string, any>();
+        uniq.forEach((to, i) => {
+          if (!results[i].ok) throw new Error(results[i].error || 'Connexion aux données impossible');
+          byTo.set(String(to), results[i].data?.kpis || {});
+        });
+        const pt = byTo.get(String(tTech)) || {};
+        const pf = byTo.get(String(tFac)) || {};
+        const pr = byTo.get(String(tRec)) || {};
         setCur(j1.data);
-        setPrev(j2.data);
-      })
-      .catch((e) => { if (e.name !== 'AbortError') setError(e.message); })
-      .finally(() => setLoading(false));
-    return () => { c1.abort(); c2.abort(); };
+        setPrev({
+          kpis: {
+            production: pt.production, technicalConsumption: pt.technicalConsumption, technicalBilling: pt.technicalBilling,
+            networkYield: pt.networkYield, billingRatio: pt.billingRatio,
+            volumeConsumed: pf.volumeConsumed, volumeBilled: pf.volumeBilled, revenue: pf.revenue, subscribers: pf.subscribers,
+            paid: pr.paid, balance: pr.balance, recovery: pr.recovery
+          }
+        });
+      } catch (e: any) {
+        if (e?.name !== 'AbortError') setError(e?.message || 'Connexion aux données impossible');
+      } finally {
+        if (!ctrl.signal.aborted) setLoading(false);
+      }
+    })();
+
+    return () => ctrl.abort();
   }, [year, compareYear, clientType]);
 
   const k = cur?.kpis || {};
@@ -103,9 +167,9 @@ export default function VueNationalePage() {
       return ((c - p) / Math.abs(p)) * 100;
     };
     return [
-      { key: 'production', icon: Droplets, title: 'Production', value: `${num(k.production || 0)} m³`, evo: evo(k.production, cmp.production), color: '#06b6d4', unit: 'm³', ok: 0, warn: 0 },
+      { key: 'production', icon: Droplets, title: 'Production', value: `${num(k.production || 0)} m³`, evo: evo(k.production, pk.production), color: '#06b6d4', unit: 'm³', ok: 0, warn: 0 },
       { key: 'consumption', icon: Waves, title: 'Consommation', value: `${num(k.volumeConsumed || 0)} m³`, evo: evo(k.volumeConsumed, pk.volumeConsumed), color: '#0284c7', unit: 'm³', ok: 0, warn: 0 },
-      { key: 'billing', icon: Receipt, title: 'Facturé', value: `${num(k.volumeBilled || 0)} m³`, evo: evo(k.volumeBilled, cmp.billing), color: '#10b981', unit: 'm³', ok: 0, warn: 0 },
+      { key: 'billing', icon: Receipt, title: 'Facturé', value: `${num(k.volumeBilled || 0)} m³`, evo: evo(k.volumeBilled, pk.volumeBilled), color: '#10b981', unit: 'm³', ok: 0, warn: 0 },
       { key: 'ca', icon: Banknote, title: 'Chiffre d’affaires', value: gnfCompact(k.revenue || 0), evo: evo(k.revenue, pk.revenue), color: '#9333ea', unit: 'GNF', ok: 0, warn: 0 },
       { key: 'encaissé', icon: Wallet, title: 'Encaissé', value: gnfCompact(k.paid || 0), evo: evo(k.paid, pk.paid), color: '#059669', unit: 'GNF', ok: 0, warn: 0 },
       { key: 'impayés', icon: AlertTriangle, title: 'Impayés', value: gnfCompact(k.balance || 0), evo: evo(k.balance, pk.balance), color: '#ef4444', unit: 'GNF', ok: 0, warn: 0 }
@@ -115,13 +179,19 @@ export default function VueNationalePage() {
   // ---- Evolution chart data ----
   const evoData = useMemo(() => {
     const rows = (cur?.monthly || []).map((m: any, i: number) => ({
-      mois: MONTHS[i % 12],
+      mois: MONTHS[Number(String(m.month).slice(5, 7)) - 1] ?? String(m.month),
       production: Number(m.production) || 0,
       consumption: Number(m.consumption) || 0,
       billing: Number(m.billing_volume) || 0
     }));
     return rows;
   }, [cur]);
+
+  const sparkOf = (key: string) =>
+    key === 'production' ? evoData.map((r: any) => ({ v: r.production }))
+      : key === 'consumption' ? evoData.map((r: any) => ({ v: r.consumption }))
+      : key === 'billing' ? evoData.map((r: any) => ({ v: r.billing }))
+      : [];
 
   const evoValue = (row: any) => {
     switch (metric) {
@@ -132,58 +202,72 @@ export default function VueNationalePage() {
     }
   };
 
-  // ---- Regional performance (static geo data) ----
-  const regionsCtx = useMemo(() => {
-    return guineaRegions.map((r) => {
-      const rec = parseFloat(String(r.recovery).replace('%', '').replace(',', '.')) / 100 || 0;
-      const prodNum = parseFloat(String(r.production).replace(/[^\d.]/g, '')) || 0;
-      const status = statusOf(rec, 0.85, 0.78);
-      return {
-        id: r.id,
-        name: r.name,
-        naturalRegion: r.naturalRegion,
-        prefectures: r.prefectures,
-        subscribers: r.subscribers,
-        production: prodNum,
-        recovery: rec,
-        yield: Math.min(1, prodNum * 0.06),
-        billed: Math.round(r.subscribers * 42),
-        ca: Math.round(r.subscribers * 4500),
-        centers: r.centers,
-        path: r.path,
-        centroid: r.centroid,
-        color: r.color,
-        status
-      };
-    });
-  }, []);
+  // ---- Géographie : repère statique, aucun chiffre ----
+  const regionsGeo = useMemo(
+    () => guineaRegions.map((r) => ({ id: r.id, name: r.name, naturalRegion: r.naturalRegion, prefectures: r.prefectures, path: r.path, color: r.color })),
+    []
+  );
+  const activeGeo = regionsGeo.find((r) => r.id === activeRegion) || null;
 
-  const sortedRegions = useMemo(() => {
-    const arr = [...regionsCtx];
+  // ---- Agences réelles (Grand Conakry) : données issues de la base ----
+  const agencyRows = useMemo(
+    () =>
+      ((cur?.agencies as any[]) || []).map((a) => {
+        const recovery = Number(a.recovery) || 0;
+        return {
+          name: String(a.name),
+          production: Number(a.production) || 0,
+          networkYield: Number(a.networkYield) || 0,
+          volumeBilled: Number(a.volumeBilled) || 0,
+          revenue: Number(a.revenue) || 0,
+          recovery,
+          hasRecovery: recovery > 0,
+          status: statusOf(recovery, 0.85, 0.78)
+        };
+      }),
+    [cur]
+  );
+
+  const sortedAgencies = useMemo(() => {
+    const arr = [...agencyRows];
     arr.sort((a, b) => {
       switch (sortKey) {
         case 'production': return b.production - a.production;
-        case 'recovery': return b.recovery - a.recovery;
-        case 'yield': return b.yield - a.yield;
-        case 'ca': return b.ca - a.ca;
-        default: return statusRank(b.recovery) - statusRank(a.recovery);
+        case 'yield': return b.networkYield - a.networkYield;
+        case 'ca': return b.revenue - a.revenue;
+        default: return b.recovery - a.recovery;
       }
     });
-    function statusRank(v: number) { if (v >= 0.85) return 3; if (v >= 0.78) return 2; return 1; }
     return arr;
-  }, [regionsCtx, sortKey]);
+  }, [agencyRows, sortKey]);
 
-  // ---- Alerts ----
+  // ---- Interaction carte : seulement la section touchée ----
+  const activeKey = activeGeo ? normTxt(activeGeo.name) : null;
+  const regionAgencies = useMemo(
+    () => agencyRows.filter((a) => activeKey && AGENCY_REGION[normTxt(a.name)] === activeKey).sort((x, y) => y.recovery - x.recovery),
+    [agencyRows, activeKey]
+  );
+  const regionCentres = useMemo(
+    () => centres.filter((c) => activeKey && normTxt(c.region) === activeKey),
+    [centres, activeKey]
+  );
+  const selectedCentre = regionCentres.find((c) => c.id === activeCentre) || null;
+  const regionRecovery = (() => {
+    const w = regionAgencies.filter((a) => a.hasRecovery);
+    return w.length ? w.reduce((sum, a) => sum + a.recovery, 0) / w.length : 0;
+  })();
+  const resetSel = () => { setActiveRegion(null); setActiveCentre(null); setActiveDrill(null); };
+
+  // ---- Alertes calculées sur les vraies données ----
   const alerts = useMemo(() => {
     const list: { sev: 'high' | 'med' | 'good'; text: string }[] = [];
-    const critical = regionsCtx.filter(r => r.recovery < 0.78);
-    const warn = regionsCtx.filter(r => r.recovery >= 0.78 && r.recovery < 0.85);
-    critical.forEach(r => list.push({ sev: 'high', text: `${r.name} : rendement/recouvrement critique (${pct(r.recovery)})` }));
-    warn.forEach(r => list.push({ sev: 'med', text: `${r.name} : recouvrement en dessous de la cible (${pct(r.recovery)})` }));
-    const improving = regionsCtx.filter(r => r.recovery >= 0.85);
-    improving.slice(0, 3).forEach(r => list.push({ sev: 'good', text: `${r.name} : recouvrement sous contrôle (${pct(r.recovery)})` }));
+    if (k.recovery > 0 && k.recovery < 0.9) list.push({ sev: k.recovery < 0.78 ? 'high' : 'med', text: `Recouvrement national à ${pct(k.recovery)} (cible 90 %)` });
+    if (k.networkYield > 0 && k.networkYield < 0.8) list.push({ sev: k.networkYield < 0.7 ? 'high' : 'med', text: `Rendement réseau à ${pct(k.networkYield)} (cible 80 %)` });
+    agencyRows.filter((a) => a.hasRecovery && a.recovery < 0.78).forEach((a) => list.push({ sev: 'high', text: `${a.name} : recouvrement critique (${pct(a.recovery)})` }));
+    agencyRows.filter((a) => a.recovery >= 0.78 && a.recovery < 0.85).forEach((a) => list.push({ sev: 'med', text: `${a.name} : recouvrement sous la cible (${pct(a.recovery)})` }));
+    agencyRows.filter((a) => a.recovery >= 0.85).slice(0, 3).forEach((a) => list.push({ sev: 'good', text: `${a.name} : recouvrement sous contrôle (${pct(a.recovery)})` }));
     return list;
-  }, [regionsCtx]);
+  }, [agencyRows, k]);
 
   // ---- Objectives ----
   const objectives = [
@@ -201,15 +285,6 @@ export default function VueNationalePage() {
     { indicator: 'Impayés', c: k.balance || 0, p: pk.balance || 0, fmt: gnfCompact },
     { indicator: 'Recouvrement', c: k.recovery || 0, p: pk.recovery || 0, fmt: pct, isPct: true }
   ];
-
-  const drillLevels = (() => {
-    if (!activeRegion) return null;
-    const region = regionsCtx.find(r => r.id === activeRegion);
-    if (!region) return null;
-    if (!activeDrill) return { level: 'région', name: region.name, detail: `Région : ${region.naturalRegion} · ${region.centers} centres` };
-    if (activeDrill.level === 'région') return { level: 'préfecture', name: activeDrill.name, detail: `${activeDrill.name} — ${region.name}` };
-    return { level: 'agence', name: activeDrill.name, detail: `Agence de ${activeDrill.name}` };
-  })();
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -234,15 +309,13 @@ export default function VueNationalePage() {
           <div style={{ flexDirection: 'row', alignItems: 'center', gap: '8px' }}>
             <span className="filter-label" style={{ marginBottom: 0 }}>Période</span>
             <select className="select-dark" value={year} onChange={(e) => setYear(Number(e.target.value))}>
-              <option value={2026}>Jan → Jun 2026</option>
-              <option value={2025}>Jan → Jun 2025</option>
+              {yearOptions.map((y) => <option key={y} value={y}>Exercice {y}</option>)}
             </select>
           </div>
           <div style={{ flexDirection: 'row', alignItems: 'center', gap: '8px' }}>
             <span className="filter-label" style={{ marginBottom: 0 }}>Comparer</span>
             <select className="select-dark" value={compareYear} onChange={(e) => setCompareYear(Number(e.target.value))}>
-              <option value={2025}>2025</option>
-              <option value={2026}>2026</option>
+              {yearOptions.map((y) => <option key={y} value={y}>{y}</option>)}
             </select>
           </div>
           <div style={{ flexDirection: 'row', alignItems: 'center', gap: '8px' }}>
@@ -254,7 +327,7 @@ export default function VueNationalePage() {
           </div>
           <div className={`db-status ${loading ? 'loading' : error ? 'error' : 'ok'}`}>
             <span />
-            {loading ? 'Actualisation…' : error ? 'MySQL indisponible' : 'Données synchronisées'}
+            {loading ? 'Actualisation…' : error ? 'Données indisponibles' : 'Données synchronisées'}
           </div>
           <button
             className="btn-brand"
@@ -273,7 +346,18 @@ export default function VueNationalePage() {
           <span className="badge-pill purple">Base de comparaison : {compareYear}</span>
         </div>
       )}
-      {error && <div className="db-error-banner">{error}. Démarre MySQL dans XAMPP puis recharge la page.</div>}
+      {error && <div className="db-error-banner">{error}. Réessayez dans un instant ou cliquez sur « Actualiser ».</div>}
+
+      {/* Situation du jour (nouveau) */}
+      <NewFeatureBubble
+        id="vue-nationale-v2"
+        block
+        align="left"
+        title="Nouveautés de la Vue Nationale"
+        lines={['Situation du jour, coût de l’eau perdue, impayés par agence, carburant et coût des arrêts.', 'Ces blocs s’affichent sous les 6 indicateurs.']}
+      >
+        <SituationDuJour extras={extras} k={k} />
+      </NewFeatureBubble>
 
       {/* 0. Périmètres : Grand Conakry + intérieur (ajout v11) */}
       {cur?.zones && (
@@ -337,9 +421,10 @@ export default function VueNationalePage() {
                 </span>
                 <span style={{ fontSize: '11px', marginLeft: 'auto' }}>{st.dot}</span>
               </div>
+              {sparkOf(n.key).length > 1 && (
               <div style={{ position: 'absolute', bottom: -6, left: 0, right: 0, height: 26, opacity: 0.5 }}>
                 <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={[0, 25, 40, 55, 42, 70, 60, 85, 65, 90].map((v, i) => ({ v, i }))}>
+                  <AreaChart data={sparkOf(n.key)}>
                     <defs>
                       <linearGradient id={`spark-${n.key}`} x1="0" y1="0" x2="0" y2="1">
                         <stop offset="0%" stopColor={n.color} stopOpacity={0.8} />
@@ -350,143 +435,225 @@ export default function VueNationalePage() {
                   </AreaChart>
                 </ResponsiveContainer>
               </div>
+              )}
             </div>
           );
         })}
       </div>
 
-      {/* 2. Carte nationale + 3. classement performances */}
-        <div className="dashboard-card">
-          <div className="card-header-flex">
-            <h3>Carte Nationale — Produit par région</h3>
-            <span className="badge-pill cyan">Cliquer une zone pour descendre</span>
+      {/* Nouveaux blocs DG : pertes en GNF, impayés, coût des arrêts, carburant */}
+      <NationalExtras k={k} cur={cur} extras={extras} />
+
+      {/* Taux de réalisation de la production (DPR, janvier → octobre 2026) */}
+      <NewFeatureBubble
+        id="vue-nationale-realisation-2026"
+        block
+        align="left"
+        title="Nouveau : taux de réalisation de la production"
+        lines={['Grand Conakry, centres et objectif annuel, avec les sites les plus en difficulté.']}
+      >
+        <RealisationResume variante="national" />
+      </NewFeatureBubble>
+
+      {/* 2. Carte de référence + classement réel des agences */}
+      <div className="dashboard-card">
+        <div className="card-header-flex">
+          <h3>Carte nationale</h3>
+          <span className="badge-pill cyan">Touchez une région ou un centre</span>
+        </div>
+        <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
+          <div style={{ flex: '2 1 420px', minWidth: 0, position: 'relative', height: 400, background: 'radial-gradient(circle at 50% 40%, #0d263a 0%, #081726 70%, #050e18 100%)', borderRadius: 8, border: '1px solid var(--border-color)', overflow: 'hidden' }}>
+            {activeGeo && (
+              <div className="vn-fade" style={{ position: 'absolute', top: 10, left: 10, zIndex: 2, display: 'flex', alignItems: 'center', gap: 8, background: 'rgba(8,20,36,0.88)', border: '1px solid var(--border-color)', borderRadius: 999, padding: '5px 6px 5px 12px', fontSize: 12, color: 'var(--text-strong)', fontWeight: 700 }}>
+                <span style={{ width: 8, height: 8, borderRadius: '50%', background: activeGeo.color }} />
+                {activeGeo.name}
+                <button type="button" onClick={resetSel} className="chip-btn" style={{ width: 'auto', padding: '3px 10px', fontSize: 11 }}>Tout afficher</button>
+              </div>
+            )}
+            <svg ref={svgRef} viewBox="0 0 960 620" preserveAspectRatio="xMidYMid meet" style={{ width: '100%', height: '100%' }}>
+              {regionsGeo.map((r) => {
+                const isActive = activeRegion === r.id;
+                const isHover = hoverRegion === r.id;
+                const dim = !!activeRegion && !isActive;
+                return (
+                  <path
+                    key={r.id}
+                    data-rid={r.id}
+                    d={r.path}
+                    fill={isActive ? r.color : `${r.color}55`}
+                    fillOpacity={isActive ? 0.7 : dim ? 0.12 : isHover ? 0.55 : 0.35}
+                    stroke={isActive || isHover ? '#ffffff' : r.color}
+                    strokeOpacity={dim ? 0.35 : 1}
+                    strokeWidth={isActive ? 2.2 : isHover ? 1.6 : 1}
+                    style={{ cursor: 'pointer', transition: 'all .25s ease', filter: isActive ? `drop-shadow(0 0 10px ${r.color})` : undefined }}
+                    onMouseEnter={() => setHoverRegion(r.id)}
+                    onMouseLeave={() => setHoverRegion(null)}
+                    onClick={() => { setActiveRegion(isActive ? null : r.id); setActiveCentre(null); setActiveDrill(null); }}
+                  >
+                    <title>{r.name}</title>
+                  </path>
+                );
+              })}
+
+              {activeRegion && !selectedCentre && pin && (
+                <g transform={`translate(${pin.x}, ${pin.y})`} style={{ pointerEvents: 'none' }}>
+                  <circle className="vn-pulse" r="8" fill="none" stroke="#38bdf8" strokeWidth="2" />
+                  <circle className="vn-pulse" r="8" fill="none" stroke="#38bdf8" strokeWidth="2" style={{ animationDelay: '1s' }} />
+                  <MapPinGlyph color="#38bdf8" />
+                </g>
+              )}
+
+              {regionCentres.map((c) => {
+                const col = CENTRE_COLOR[c.statut] ?? '#f59e0b';
+                const sel = c.id === activeCentre;
+                return (
+                  <g
+                    key={c.id}
+                    transform={`translate(${c.x}, ${c.y})`}
+                    style={{ cursor: 'pointer' }}
+                    onClick={(e) => { e.stopPropagation(); setActiveCentre(sel ? null : c.id); }}
+                  >
+                    <circle className="vn-pulse" r="7" fill="none" stroke={col} strokeWidth="2" />
+                    <circle className="vn-pulse" r="7" fill="none" stroke={col} strokeWidth="2" style={{ animationDelay: '1s' }} />
+                    <circle r={sel ? 7 : 5} fill={col} stroke="#ffffff" strokeWidth={sel ? 2.2 : 1.4} />
+                    {sel && <g transform="translate(0, -8)"><MapPinGlyph color={col} scale={0.75} /></g>}
+                    <title>{`${c.name} — ${c.status}`}</title>
+                  </g>
+                );
+              })}
+            </svg>
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 220px', gap: '14px' }}>
-            <div style={{ position: 'relative', height: 340, background: 'radial-gradient(circle at 50% 40%, #0d263a 0%, #081726 70%, #050e18 100%)', borderRadius: 8, border: '1px solid var(--border-color)', overflow: 'hidden' }}>
-              <svg viewBox="0 0 960 620" preserveAspectRatio="xMidYMid meet" style={{ width: '100%', height: '100%' }}>
-                {regionsCtx.map((r) => {
-                  const isActive = activeRegion === r.id;
-                  return (
-                    <path
-                      key={r.id}
-                      d={r.path}
-                      fill={isActive ? r.color : `${r.color}55`}
-                      fillOpacity={isActive ? 0.65 : 0.35}
-                      stroke={isActive ? '#ffffff' : r.color}
-                      strokeWidth={isActive ? 2 : 1}
-                      style={{ cursor: 'pointer', transition: 'all 0.2s' }}
-                      onClick={() => {
-                        setActiveRegion(activeRegion === r.id ? null : r.id);
-                        setActiveDrill(null);
-                      }}
-                    >
-                      <title>{`${r.name} — recouvrement ${pct(r.recovery)}`}</title>
-                    </path>
-                  );
-                })}
-              </svg>
-              {/* Legend */}
-              <div style={{ position: 'absolute', bottom: 10, left: 10, background: 'rgba(8,20,36,0.9)', border: '1px solid var(--border-color)', borderRadius: 8, padding: '8px 10px', fontSize: '10px', color: 'var(--text-muted)' }}>
-                <div style={{ fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 4 }}>Légende performance</div>
-                <div>🟢 Recouvrement ≥ 85%</div>
-                <div>🟠 78% – 85%</div>
-                <div>🔴 &lt; 78%</div>
-              </div>
-            </div>
 
-            {/* Drill-down panel */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-              <div style={{ background: 'var(--bg-inner)', border: '1px solid var(--border-color)', borderRadius: 8, padding: '12px' }}>
-                <div style={{ fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--text-dim)', marginBottom: 6 }}>Parcours géographique</div>
-                {!activeRegion ? (
-                  <div style={{ color: 'var(--text-muted)', fontSize: '12px', lineHeight: 1.5 }}>
-                    Sélectionnez une zone sur la carte pour descendre du niveau <strong>national → région → préfecture → agence</strong>.
+          {activeGeo ? (
+            <div key={activeGeo.id} className="vn-fade" style={{ flex: '1 1 260px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ background: 'var(--bg-inner)', border: '1px solid var(--border-color)', borderRadius: 8, padding: 12 }}>
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 10 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--text-dim)', marginBottom: 4 }}>Région sélectionnée</div>
+                    <div style={{ fontSize: 17, fontWeight: 800, color: 'var(--text-strong)' }}>{activeGeo.name}</div>
+                    <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Région naturelle : {activeGeo.naturalRegion}</div>
                   </div>
-                ) : (
-                  <>
-                    <div className="breadcrumb-pill">
-                      <b>GUINÉE</b>
-                      <ChevronRight size={12} />
-                      <b>RÉGION</b>
-                      <ChevronRight size={12} />
-                      <b>PRÉFECTURE</b>
-                      <ChevronRight size={12} />
-                      <b>AGENCE</b>
-                    </div>
-                    {drillLevels && (
-                      <div style={{ marginTop: 8 }}>
-                        <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-strong)' }}>{drillLevels.name}</div>
-                        <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{drillLevels.detail}</div>
-                      </div>
-                    )}
-                    {(() => {
-                      const region = regionsCtx.find(r => r.id === activeRegion)!;
-                      if (!activeDrill || activeDrill.level === 'région') {
-                        const prefs = region.prefectures.split(',').map((s: string) => s.trim());
-                        return (
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: 8 }}>
-                            {prefs.map((p: string) => (
-                              <button key={p} className="chip-btn" onClick={() => setActiveDrill({ level: 'région', name: p })}>
-                                <MapPin size={12} /> {p}
-                                <ChevronRight size={12} style={{ marginLeft: 'auto' }} />
-                              </button>
-                            ))}
-                          </div>
-                        );
-                      }
-                      return (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: 8 }}>
-                          {[`Agence ${activeDrill.name}`, `${activeDrill.name} Centre`].map((a) => (
-                            <button key={a} className="chip-btn" onClick={() => setActiveDrill({ level: 'préfecture', name: a.replace('Agence ', '') })}>
-                              <Building size={12} /> {a}
-                            </button>
-                          ))}
-                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginTop: 4 }}>
-                            <div className="mini-stat"><span>Abonnés</span><b>{num(region.subscribers)}</b></div>
-                            <div className="mini-stat"><span>Recouvr.</span><b style={{ color: region.status.color }}>{pct(region.recovery)}</b></div>
-                            <div className="mini-stat"><span>Centres</span><b>{region.centers}</b></div>
-                            <div className="mini-stat"><span>Production</span><b>{num(region.production)} m³/j</b></div>
-                          </div>
-                        </div>
-                      );
-                    })()}
-                  </>
-                )}
+                  <button type="button" className="chip-btn" style={{ width: 'auto', padding: '5px 10px', fontSize: 11 }} onClick={resetSel}>Tout afficher</button>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(90px, 1fr))', gap: 6 }}>
+                  {regionAgencies.length > 0 && <div className="mini-stat"><span>Agences</span><b>{regionAgencies.length}</b></div>}
+                  {regionAgencies.length > 0 && <div className="mini-stat"><span>Recouvr. moyen</span><b>{regionRecovery > 0 ? pct(regionRecovery) : '—'}</b></div>}
+                  <div className="mini-stat"><span>Centres signalés</span><b style={{ color: regionCentres.length ? '#f59e0b' : '#10b981' }}>{regionCentres.length}</b></div>
+                </div>
               </div>
 
-              {/* Classement */}
-              <div style={{ background: 'var(--bg-inner)', border: '1px solid var(--border-color)', borderRadius: 8, padding: '12px', flex: 1 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '11px', fontWeight: 800, color: '#38bdf8', marginBottom: 8 }}>
-                  <Trophy size={14} /> PERFORMANCE DES ZONES
+              {regionAgencies.length > 0 && (
+                <div style={{ background: 'var(--bg-inner)', border: '1px solid var(--border-color)', borderRadius: 8, padding: 12 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 800, color: '#38bdf8', marginBottom: 8 }}>
+                    <Trophy size={14} /> AGENCES · RECOUVREMENT
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {regionAgencies.map((a, i) => (
+                      <div key={a.name} className="chip-btn" style={{ justifyContent: 'flex-start', padding: '7px 10px', cursor: 'default' }}>
+                        <span style={{ width: 16, fontWeight: 800, color: i < 3 ? '#38bdf8' : '#64748b' }}>{i + 1}</span>
+                        <span style={{ flex: 1, textAlign: 'left', fontWeight: 600 }}>{a.name}</span>
+                        <span style={{ color: a.hasRecovery ? a.status.color : 'var(--text-dim)', fontWeight: 700 }}>{a.hasRecovery ? pct(a.recovery) : '—'}</span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  {sortedRegions.slice(0, 6).map((r, i) => (
-                    <button
-                      key={r.id}
-                      className="chip-btn"
-                      style={{ justifyContent: 'flex-start', padding: '7px 10px' }}
-                      onClick={() => setActiveRegion(activeRegion === r.id ? null : r.id)}
-                    >
-                      <span style={{ width: 16, fontWeight: 800, color: i < 3 ? '#38bdf8' : '#64748b' }}>{i + 1}</span>
-                      <span style={{ flex: 1, textAlign: 'left', fontWeight: 600 }}>{r.name}</span>
-                      <span style={{ color: r.status.color, fontWeight: 700 }}>{pct(r.recovery)}</span>
-                    </button>
+              )}
+
+              {regionCentres.length > 0 && (
+                <div style={{ background: 'var(--bg-inner)', border: '1px solid var(--border-color)', borderRadius: 8, padding: 12 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 800, color: '#f59e0b', marginBottom: 8 }}>
+                    <AlertTriangle size={14} /> CENTRES SIGNALÉS
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {regionCentres.map((c) => {
+                      const col = CENTRE_COLOR[c.statut] ?? '#f59e0b';
+                      const sel = c.id === activeCentre;
+                      return (
+                        <button
+                          key={c.id}
+                          type="button"
+                          className="chip-btn"
+                          style={{ justifyContent: 'flex-start', padding: '7px 10px', borderColor: sel ? col : undefined }}
+                          onClick={() => setActiveCentre(sel ? null : c.id)}
+                        >
+                          <span style={{ width: 9, height: 9, borderRadius: '50%', background: col, flexShrink: 0 }} />
+                          <span style={{ flex: 1, textAlign: 'left', fontWeight: 600 }}>{c.location}</span>
+                          <span style={{ color: col, fontWeight: 700, fontSize: 11 }}>{CENTRE_LABEL[c.statut] ?? c.statut}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {selectedCentre && (
+                    <div className="vn-fade" style={{ marginTop: 10, padding: 10, borderRadius: 8, border: `1px solid ${CENTRE_COLOR[selectedCentre.statut] ?? '#f59e0b'}55`, background: 'rgba(148,163,184,.05)' }}>
+                      <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--text-strong)', marginBottom: 4 }}>{selectedCentre.name}</div>
+                      <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5 }}>{selectedCentre.status}</div>
+                      <Link href="/centres" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, color: '#38bdf8', marginTop: 8, textDecoration: 'none' }}>
+                        Voir le détail <ChevronRight size={12} />
+                      </Link>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {regionAgencies.length === 0 && regionCentres.length === 0 && (
+                <div style={{ background: 'var(--bg-inner)', border: '1px solid var(--border-color)', borderRadius: 8, padding: 12, fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+                  Aucune agence ni centre signalé dans cette région pour le moment.
+                </div>
+              )}
+
+              <div style={{ background: 'var(--bg-inner)', border: '1px solid var(--border-color)', borderRadius: 8, padding: 12 }}>
+                <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--text-dim)', marginBottom: 8 }}>Préfectures</div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {activeGeo.prefectures.split(',').map((pf: string) => (
+                    <span key={pf} className="chip-btn" style={{ width: 'auto', cursor: 'default' }}>
+                      <Building size={12} /> {pf.trim()}
+                    </span>
                   ))}
                 </div>
-                <Link href="/territoire" style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '11px', color: '#38bdf8', marginTop: 8, textDecoration: 'none' }}>
+              </div>
+            </div>
+          ) : (
+            <div style={{ flex: '1 1 260px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ background: 'var(--bg-inner)', border: '1px solid var(--border-color)', borderRadius: 8, padding: 12 }}>
+                <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--text-dim)', marginBottom: 6 }}>Région sélectionnée</div>
+                <div style={{ color: 'var(--text-muted)', fontSize: 12, lineHeight: 1.5 }}>
+                  Touchez une région sur la carte : ses agences, ses centres signalés et ses préfectures s’affichent ici, seuls.
+                </div>
+              </div>
+
+              <div style={{ background: 'var(--bg-inner)', border: '1px solid var(--border-color)', borderRadius: 8, padding: 12, flex: 1 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 800, color: '#38bdf8', marginBottom: 8 }}>
+                  <Trophy size={14} /> AGENCES · RECOUVREMENT
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {[...agencyRows].sort((x, y) => y.recovery - x.recovery).slice(0, 6).map((a, i) => (
+                    <div key={a.name} className="chip-btn" style={{ justifyContent: 'flex-start', padding: '7px 10px', cursor: 'default' }}>
+                      <span style={{ width: 16, fontWeight: 800, color: i < 3 ? '#38bdf8' : '#64748b' }}>{i + 1}</span>
+                      <span style={{ flex: 1, textAlign: 'left', fontWeight: 600 }}>{a.name}</span>
+                      <span style={{ color: a.hasRecovery ? a.status.color : 'var(--text-dim)', fontWeight: 700 }}>{a.hasRecovery ? pct(a.recovery) : '—'}</span>
+                    </div>
+                  ))}
+                  {agencyRows.length === 0 && <div style={{ color: 'var(--text-dim)', fontSize: 12 }}>Aucune donnée d’agence pour cet exercice.</div>}
+                </div>
+                <Link href="/territoire" style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: '#38bdf8', marginTop: 8, textDecoration: 'none' }}>
                   Voir toutes les agences <ChevronRight size={12} />
+                </Link>
+                <Link href="/centres" style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: '#38bdf8', marginTop: 6, textDecoration: 'none' }}>
+                  Centres de l’intérieur <ChevronRight size={12} />
                 </Link>
               </div>
             </div>
-          </div>
+          )}
         </div>
+      </div>
 
-      {/* 4. Performance territoriale matrix */}
+      {/* 4. Performance par agence (données réelles) */}
       <div className="dashboard-card">
         <div className="card-header-flex">
           <h3>Performance Territoriale</h3>
-          <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-            <span style={{ fontSize: '10px', color: 'var(--text-dim)' }}>Trier :</span>
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+            <span className="badge-pill cyan">Agences de Grand Conakry · données réelles</span>
+            <span style={{ fontSize: 10, color: 'var(--text-dim)' }}>Trier :</span>
             {([['performance', 'Performance'], ['production', 'Production'], ['recovery', 'Recouvr.'], ['yield', 'Rendement'], ['ca', 'CA']] as const).map(([key, label]) => (
               <button key={key} className={`btn-brand ${sortKey === key ? '' : 'ghost'}`} style={{ fontSize: '10.5px', padding: '4px 8px' }} onClick={() => setSortKey(key)}>
                 {label}
@@ -499,7 +666,7 @@ export default function VueNationalePage() {
             <thead>
               <tr>
                 <th>Zone</th>
-                <th>Production (m³/j)</th>
+                <th>Production (m³)</th>
                 <th>Rendement</th>
                 <th>Facturé (m³)</th>
                 <th>Chiffre d’affaires</th>
@@ -507,26 +674,25 @@ export default function VueNationalePage() {
               </tr>
             </thead>
             <tbody>
-              {sortedRegions.map((r) => (
-                <tr key={r.id}>
+              {sortedAgencies.map((a) => (
+                <tr key={a.name}>
+                  <td><strong style={{ color: 'var(--text-strong)' }}>{a.name}</strong></td>
+                  <td style={{ fontWeight: 700, color: '#38bdf8' }}>{a.production > 0 ? num(a.production) : '—'}</td>
+                  <td style={{ color: a.networkYield >= 0.8 ? '#10b981' : '#f59e0b', fontWeight: 700 }}>{a.production > 0 ? pct(a.networkYield) : '—'}</td>
+                  <td>{a.volumeBilled > 0 ? num(a.volumeBilled) : '—'}</td>
+                  <td>{a.revenue > 0 ? gnfCompact(a.revenue) : '—'}</td>
                   <td>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span style={{ width: 10, height: 10, borderRadius: '50%', background: r.color }} />
-                      <strong style={{ color: 'var(--text-strong)' }}>{r.name}</strong>
-                      <span style={{ fontSize: '10px', color: 'var(--text-dim)' }}>({r.naturalRegion})</span>
-                    </div>
-                  </td>
-                  <td style={{ fontWeight: 700, color: '#38bdf8' }}>{num(r.production)}</td>
-                  <td style={{ color: r.yield >= 0.85 ? '#10b981' : '#f59e0b', fontWeight: 700 }}>{pct(r.yield)}</td>
-                  <td>{num(r.billed)}</td>
-                  <td>{gnfCompact(r.ca)}</td>
-                  <td>
-                    <span className={`badge-pill ${r.recovery >= 0.85 ? 'green' : r.recovery >= 0.78 ? 'amber' : 'red'}`} style={{ fontSize: '11px' }}>
-                      {r.status.dot} {pct(r.recovery)}
-                    </span>
+                    {a.hasRecovery ? (
+                      <span className={`badge-pill ${a.recovery >= 0.85 ? 'green' : a.recovery >= 0.78 ? 'amber' : 'red'}`} style={{ fontSize: '11px' }}>
+                        {a.status.dot} {pct(a.recovery)}
+                      </span>
+                    ) : '—'}
                   </td>
                 </tr>
               ))}
+              {sortedAgencies.length === 0 && (
+                <tr><td colSpan={6} style={{ color: 'var(--text-dim)' }}>Aucune donnée d’agence pour cet exercice.</td></tr>
+              )}
             </tbody>
           </table>
         </div>
@@ -651,7 +817,7 @@ export default function VueNationalePage() {
       <div className="dashboard-card">
         <div className="card-header-flex">
           <h3>Comparaison {compareYear} / {year}</h3>
-          <span className="badge-pill cyan">Périodes homogènes (Jan → Jun)</span>
+          <span className="badge-pill cyan">Mêmes mois comparés · {compareYear} / {year}</span>
         </div>
         <div style={{ overflowX: 'auto' }}>
           <table className="dark-table">
@@ -691,4 +857,15 @@ export default function VueNationalePage() {
 
 function Building({ size = 14, color }: { size?: number; color?: string }) {
   return <MapPin size={size} color={color} />;
+}
+
+function MapPinGlyph({ color = '#38bdf8', scale = 1 }: { color?: string; scale?: number }) {
+  return (
+    <g className="vn-bounce" style={{ pointerEvents: 'none' }}>
+      <g transform={`scale(${scale})`}>
+        <path d="M0 0 C-5 -8 -10 -13 -10 -19 A10 10 0 1 1 10 -19 C10 -13 5 -8 0 0 Z" fill={color} stroke="#ffffff" strokeWidth="1.6" />
+        <circle cx="0" cy="-19" r="3.6" fill="#ffffff" />
+      </g>
+    </g>
+  );
 }

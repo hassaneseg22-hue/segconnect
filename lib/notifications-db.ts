@@ -19,6 +19,7 @@ export interface CountResult {
   unread: number;
   critical: number;
   warning: number;
+  total?: number;
 }
 
 /**
@@ -145,46 +146,25 @@ export async function listNotifications(
  * Retourne les compteurs de notifications non lues.
  */
 export async function getCounts(): Promise<CountResult> {
-  const { data, error } = await supabaseAdmin
-    .from('notifications')
-    .select('type, is_read');
-
-  if (error) {
-    console.error(
-      '[notifications-db] getCounts:',
-      error
+  const count = async (build: (q: any) => any): Promise<number> => {
+    const { count, error } = await build(
+      supabaseAdmin.from('notifications').select('id', { count: 'exact', head: true })
     );
-
-    throw error;
-  }
-
-  let unread = 0;
-  let critical = 0;
-  let warning = 0;
-
-  for (const row of data ?? []) {
-    const isUnread = !row.is_read;
-
-    if (!isUnread) {
-      continue;
+    if (error) {
+      console.error('[notifications-db] getCounts:', error);
+      throw error;
     }
-
-    unread++;
-
-    if (row.type === 'critical') {
-      critical++;
-    }
-
-    if (row.type === 'warning') {
-      warning++;
-    }
-  }
-
-  return {
-    unread,
-    critical,
-    warning,
+    return count ?? 0;
   };
+
+  const [total, unread, critical, warning] = await Promise.all([
+    count((q) => q),
+    count((q) => q.eq('is_read', false)),
+    count((q) => q.eq('is_read', false).eq('type', 'critical')),
+    count((q) => q.eq('is_read', false).eq('type', 'warning')),
+  ]);
+
+  return { unread, critical, warning, total };
 }
 
 /**

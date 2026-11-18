@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { Bell, CheckCheck, ArrowLeft, RefreshCw, AlertTriangle, ExternalLink } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { PushToggle } from '@/components/PushToggle';
 
 type Notif = {
   id: number;
@@ -17,7 +18,7 @@ type Notif = {
   is_read: number;
   created_at: string;
 };
-type Counts = { unread: number; critical: number; warning: number };
+type Counts = { unread: number; critical: number; warning: number; total?: number };
 
 const TYPE_META: Record<Notif['type'], { label: string; icon: string; color: string }> = {
   critical: { label: 'CRITIQUE', icon: '🔴', color: '#f87171' },
@@ -37,7 +38,7 @@ export default function NotificationsPage() {
   const [counts, setCounts] = useState<Counts>({ unread: 0, critical: 0, warning: 0 });
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
-  const [filterType, setFilterType] = useState<'all' | Notif['type']>('all');
+  const [filterType, setFilterType] = useState<string>('all');
   const [showRead, setShowRead] = useState(true);
   const [genMsg, setGenMsg] = useState('');
   const router = useRouter();
@@ -45,7 +46,7 @@ export default function NotificationsPage() {
   const load = async () => {
     setLoading(true);
     try {
-      const r = await fetch('/api/notifications?limit=200', { cache: 'no-store' });
+      const r = await fetch('/api/notifications?limit=300', { cache: 'no-store' });
       const j = await r.json();
       if (j.ok) { setNotifs(j.data); setCounts(j.counts); }
     } catch { /* empty */ }
@@ -66,7 +67,7 @@ export default function NotificationsPage() {
       } else {
         setGenMsg(`Erreur : ${j.error}`);
       }
-    } catch { setGenMsg("Impossible de contacter le moteur d'alertes (MySQL ?)."); }
+    } catch { setGenMsg("Impossible de contacter le moteur d'alertes."); }
     finally { setRunning(false); load(); }
   };
 
@@ -83,7 +84,7 @@ export default function NotificationsPage() {
   };
 
   const filtered = notifs.filter((n) =>
-    (filterType === 'all' || n.type === filterType) &&
+    (filterType === 'all' || n.type === filterType || (filterType === 'centres' && String(n.category).toLowerCase() === 'centres')) &&
     (showRead || !n.is_read)
   );
 
@@ -102,9 +103,10 @@ export default function NotificationsPage() {
       <div className="subpage-header">
         <div className="subpage-title">
           <h2><Bell size={20} style={{ display: 'inline', marginRight: 6, color: '#38bdf8' }} />Centre de Notifications DG</h2>
-          <p>Alertes financières, techniques, commerciales, qualité des données et système — générées depuis MySQL</p>
+          <p>Alertes financières, techniques, commerciales, qualité des données et système — générées automatiquement depuis Supabase</p>
         </div>
         <div className="subpage-filters">
+          <PushToggle />
           <button className="btn-brand" onClick={regenerate} disabled={running} style={{ fontSize: '11.5px', padding: '8px 12px' }}>
             <RefreshCw size={13} className={running ? 'spin' : ''} />
             {running ? 'Analyse en cours…' : 'Régénérer les alertes'}
@@ -159,7 +161,7 @@ export default function NotificationsPage() {
             </div>
             <div className="kpi-title-value">
               <div className="kpi-title">Total reçues</div>
-              <div className="kpi-num-row"><span className="kpi-main-val">{notifs.length}</span></div>
+              <div className="kpi-num-row"><span className="kpi-main-val">{counts.total ?? notifs.length}</span></div>
             </div>
           </div>
         </div>
@@ -169,7 +171,7 @@ export default function NotificationsPage() {
 
       {/* Filtres */}
       <div className="dashboard-filter-bar" style={{ marginBottom: '2px' }}>
-        {([['all', 'Tout'], ['critical', '🔴 Critique'], ['warning', '🟠 Attention'], ['info', '🔵 Info'], ['success', '🟢 Système']] as const).map(([k, label]) => (
+        {([['all', 'Tout'], ['critical', '🔴 Critique'], ['warning', '🟠 Attention'], ['info', '🔵 Info'], ['success', '🟢 Système'], ['centres', '🏭 Centres']] as const).map(([k, label]) => (
           <button key={k} className={`notif-filter-chip ${filterType === k ? 'active' : ''}`} onClick={() => setFilterType(k as any)} style={{ width: 'auto', display: 'inline-flex' }}>
             {label}
           </button>
@@ -184,7 +186,7 @@ export default function NotificationsPage() {
         {loading && <div className="dark-alert-box info"><p style={{ color: 'var(--text-secondary)' }}>Chargement…</p></div>}
         {!loading && filtered.length === 0 && (
           <div className="dashboard-card" style={{ textAlign: 'center', color: 'var(--text-dim)', padding: '24px' }}>
-            Aucune notification pour ce filtre. Lancez « Régénérer les alertes » pour analyser les données MySQL.
+            Aucune notification pour ce filtre. Lancez « Régénérer les alertes » pour analyser les données.
           </div>
         )}
         {filtered.map((n) => {

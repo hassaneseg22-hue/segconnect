@@ -5,9 +5,10 @@ import { Maximize2, Minimize2, LogOut, ChevronDown, Sun, Moon, User as UserIcon 
 import { NotificationBell } from '@/components/NotificationBell';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { useTheme } from '@/components/ThemeProvider';
+import { CalendarPopover } from '@/components/CalendarPopover';
 
 export function Header() {
-  const { user, logout } = useAuth();
+  const { user, logout, hasPermission } = useAuth();
   const { theme, toggleTheme } = useTheme();
   const [time, setTime] = useState('--:--:--');
   const [dateStr, setDateStr] = useState('');
@@ -61,10 +62,14 @@ export function Header() {
 
       <div className="header-right">
         {/* Live Clock & Date */}
-        <div className="header-clock">
-          <div className="clock-time">{time}</div>
-          <div className="clock-date">{dateStr}</div>
-        </div>
+        {hasPermission('calendrier.view') ? (
+          <CalendarPopover time={time} dateStr={dateStr} />
+        ) : (
+          <div className="header-clock">
+            <div className="clock-time">{time}</div>
+            <div className="clock-date">{dateStr}</div>
+          </div>
+        )}
 
         {/* Centre de notifications DG */}
         <NotificationBell />
@@ -95,6 +100,9 @@ export function Header() {
             onClick={() => setMenuOpen(!menuOpen)}
             style={{ background: 'transparent', border: 'none', display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', padding: 0 }}
           >
+            <span className="dg-avatar">
+              <span className="dg-avatar-ring">
+                <span className="dg-avatar-spin" aria-hidden="true" />
             <div
               className="avatar-img"
               style={{
@@ -110,6 +118,9 @@ export function Header() {
             >
               {avatarSafe ? <img src={avatarSafe} alt="Avatar" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : (initials || 'DG')}
             </div>
+              </span>
+              <span className="dg-avatar-dot" aria-hidden="true" />
+            </span>
             <div className="user-info">
               <div className="user-name">{displayName}</div>
               <div className="user-role">{user?.jobTitle?.trim() || user?.role || 'SEG Guinée'}</div>

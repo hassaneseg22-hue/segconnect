@@ -35,6 +35,8 @@ import {
 
 import { nationalSummary } from '@/lib/dashboard-data';
 import { SegNetworkLayer, SegNetworkLegend, projectToMap, useSegMapSummary, useSegRealMarkers } from '@/components/SegNetworkLayer';
+import { CentresLayer, useCentresUrgents } from '@/components/CentresLayer';
+import { NewFeatureBubble } from '@/components/NewFeatureBubble';
 
 type NationalMapProps = {
   year?: number;
@@ -82,6 +84,8 @@ export function NationalMap({
 
   const MAP_MAX_ZOOM = 14;
   const [showNetwork, setShowNetwork] = useState<boolean>(true);
+  const [showCentres, setShowCentres] = useState<boolean>(true);
+  const centresUrgents = useCentresUrgents();
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
   const cardRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef({ zoom: 1, pan: { x: 0, y: 0 } });
@@ -413,6 +417,98 @@ export function NationalMap({
     setSelectedMarker(null);
     setRegionFilter('all');
   };
+
+  /*
+   * ============================================================
+   * SEGE : PILOTAGE DE LA CARTE PAR L'ASSISTANTE DU DG
+   * ============================================================
+   * Commandes reçues par l'évènement « sege-carte » :
+   * zoom-in, zoom-out, reset, conakry, plein-ecran, filtre, centres, region, lieu.
+   * Réponse renvoyée par l'évènement « sege-carte-resultat ».
+   */
+
+  const segeRef = useRef<(d: { action: string; cible?: string; type?: string; essai?: number }) => void>(() => {});
+  segeRef.current = (d) => {
+    const nrm = (v: unknown) => String(v ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+    const repondre = (r: Record<string, unknown>) => window.dispatchEvent(new CustomEvent('sege-carte-resultat', { detail: r }));
+    const focusOn = (mx: number, my: number, z: number) => {
+      const el = containerRef.current;
+      if (!el) return;
+      const W = el.clientWidth;
+      const H = el.clientHeight;
+      const sc = Math.min(W / MAP_CONFIG.width, H / MAP_CONFIG.height);
+      const qx = (W - MAP_CONFIG.width * sc) / 2 + mx * sc - W / 2;
+      const qy = (H - MAP_CONFIG.height * sc) / 2 + my * sc - H / 2;
+      setZoomLevel(z);
+      setPan({ x: -z * qx, y: -z * qy });
+    };
+    try { cardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch { /* ignoré */ }
+    switch (d.action) {
+      case 'zoom-in': zoomAt(1.6); repondre({ ok: true }); return;
+      case 'zoom-out': zoomAt(1 / 1.6); repondre({ ok: true }); return;
+      case 'reset': handleReset(); setFilterType('all'); repondre({ ok: true }); return;
+      case 'conakry': setSelectedRegion(null); setRegionFilter('all'); focusConakry(); repondre({ ok: true }); return;
+      case 'plein-ecran': toggleFullscreen(); repondre({ ok: true }); return;
+      case 'filtre': setFilterType(d.type || 'all'); repondre({ ok: true }); return;
+      case 'centres':
+        setShowCentres(true); setFilterType('all'); setSelectedRegion(null); setRegionFilter('all'); setZoomLevel(1); setPan({ x: 0, y: 0 });
+        repondre({ ok: true, nombre: centresUrgents.length }); return;
+      case 'region': {
+        const k = nrm(d.cible);
+        const r = guineaRegions.find((x) => nrm(x.name) === k || nrm(x.rawName) === k || k.includes(nrm(x.rawName)));
+        if (!r) { repondre({ ok: false }); return; }
+        setSelectedMarker(null); setSelectedRegion(r); setRegionFilter(r.name);
+        focusOn(r.centroid[0], r.centroid[1], 2.2);
+        repondre({ ok: true, libelle: `région de ${r.name}`, statut: `${r.naturalRegion}, préfectures : ${r.prefectures}` });
+        return;
+      }
+      case 'lieu': {
+        const k = nrm(d.cible);
+        if (!k) { repondre({ ok: false }); return; }
+        const pool: any[] = [
+          ...((centresUrgents as any[]) || []),
+          ...((realMarkers as any[]) || []),
+          ...guineaMarkers.filter((m) => m.type === 'direction' || m.type === 'agence'),
+        ];
+        const correspond = (m: any) => {
+          const n = ` ${nrm(m.name)} `;
+          const l = ` ${nrm(m.location)} `;
+          return n.trim() === k || l.trim() === k || n.includes(` ${k} `) || l.includes(` ${k} `);
+        };
+        let m: any = pool.find(correspond);
+        if (!m) {
+          const c = guineaCities.find((x) => nrm(x.name) === k);
+          if (c) m = { id: `ville-${c.id}`, type: 'agence', name: c.name, location: c.name, region: c.region, status: 'Ville', lat: c.lat, lon: c.lon, x: c.x, y: c.y };
+        }
+        if (!m) {
+          if (d.essai === 1) { setTimeout(() => segeRef.current({ ...d, essai: 2 }), 1500); return; }
+          repondre({ ok: false }); return;
+        }
+        setSelectedRegion(null); setRegionFilter('all'); setFilterType('all'); setShowCentres(true);
+        setSelectedMarker(m as MarkerData);
+        focusOn(Number(m.x), Number(m.y), 5);
+        repondre({ ok: true, libelle: m.name, statut: m.status, region: m.region });
+        return;
+      }
+      default: repondre({ ok: false });
+    }
+  };
+
+  useEffect(() => {
+    const w = window as unknown as { __segeCarte?: boolean };
+    w.__segeCarte = true;
+    const ecoute = (e: Event) => segeRef.current(((e as CustomEvent).detail || {}) as { action: string });
+    window.addEventListener('sege-carte', ecoute);
+    let t: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const enAttente = sessionStorage.getItem('sege-carte-cmd');
+      if (enAttente) {
+        sessionStorage.removeItem('sege-carte-cmd');
+        t = setTimeout(() => segeRef.current(JSON.parse(enAttente)), 1200);
+      }
+    } catch { /* ignoré */ }
+    return () => { w.__segeCarte = false; window.removeEventListener('sege-carte', ecoute); if (t) clearTimeout(t); };
+  }, []);
 
   /*
    * ============================================================
@@ -846,6 +942,23 @@ export function NationalMap({
               />
               Réseau SEG (schéma)
             </label>
+
+            <NewFeatureBubble id="map-centres-dr-nzerekore-2026-11" side title="Centres de la DR N’Zérékoré"
+          lines={['Guéckédou, Macenta, Lola, N’Zérékoré et Yomou : problèmes techniques signalés le 13/11/2026.', 'Cochez « Centres en difficulté » pour les voir sur la carte.']}>
+              <label
+                style={{ fontSize: '11px', color: '#e2e8f0', display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}
+              >
+                <input
+                  type="checkbox"
+                  checked={showCentres}
+                  onChange={(e) => setShowCentres(e.target.checked)}
+                />
+                Centres en difficulté ({centresUrgents.length})
+              </label>
+            </NewFeatureBubble>
+            <div style={{ fontSize: '10px', color: '#94a3b8', lineHeight: 1.5, marginTop: -4 }}>
+              <span style={{ color: '#ef4444' }}>▲</span> à l’arrêt · <span style={{ color: '#f59e0b' }}>▲</span> perturbé
+            </div>
           </div>
         )}
 
@@ -2057,6 +2170,8 @@ export function NationalMap({
                 }
               )}
             </g>
+          {/* Centres de l'intérieur en difficulté (rapport DC) */}
+            <CentresLayer markers={centresUrgents} zoom={zoomLevel} visible={showCentres} onSelect={(m) => setSelectedMarker(m)} />
           </svg>
         </div>
       </div>

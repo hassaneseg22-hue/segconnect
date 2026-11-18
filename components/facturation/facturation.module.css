@@ -1,0 +1,81 @@
+/* components/facturation/facturation.module.css
+   Couleurs neutres/transparentes : s'adapte au thème clair ou sombre du dashboard. */
+.racine {
+  --eau: #1f6fb2;        /* Conakry */
+  --lagune: #17a2a2;     /* Intérieur */
+  --alerte: #c2410c;
+  --trait: rgba(127, 127, 127, 0.22);
+  --voile: rgba(127, 127, 127, 0.07);
+  --doux: rgba(127, 127, 127, 0.95);
+  color: inherit;
+  font-variant-numeric: tabular-nums;
+  display: grid;
+  gap: 20px;
+}
+
+/* ---------- En-tête et filtres ---------- */
+.entete { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px; }
+.titre { margin: 0; font-size: 1.25rem; font-weight: 650; line-height: 1.25; }
+.sousTitre { margin: 4px 0 0; font-size: 0.85rem; color: var(--doux); }
+.filtres { display: flex; flex-wrap: wrap; gap: 8px; }
+.segment { display: inline-flex; border: 1px solid var(--trait); border-radius: 8px; overflow: hidden; }
+.segment button {
+  appearance: none; border: 0; background: transparent; color: inherit;
+  padding: 6px 12px; font: inherit; font-size: 0.85rem; cursor: pointer;
+}
+.segment button + button { border-left: 1px solid var(--trait); }
+.segment button[aria-pressed="true"] { background: var(--eau); color: #fff; }
+.segment button:focus-visible, .lien:focus-visible, .details summary:focus-visible { outline: 2px solid var(--eau); outline-offset: 2px; }
+
+/* ---------- Chiffres clés ---------- */
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+.kpi { border: 1px solid var(--trait); border-top: 3px solid var(--eau); border-radius: 10px; padding: 14px 16px; }
+.kpiValeur { font-size: 1.6rem; font-weight: 700; line-height: 1.1; }
+.kpiUnite { font-size: 0.85rem; font-weight: 500; margin-left: 4px; color: var(--doux); }
+.kpiLibelle { margin-top: 4px; font-size: 0.82rem; color: var(--doux); }
+.kpiNote { margin-top: 6px; font-size: 0.75rem; color: var(--alerte); }
+
+/* ---------- Blocs ---------- */
+.bloc { border: 1px solid var(--trait); border-radius: 10px; padding: 16px; min-width: 0; }
+.blocTitre { margin: 0 0 12px; font-size: 0.95rem; font-weight: 600; }
+.deuxColonnes { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 20px; }
+@media (max-width: 900px) { .deuxColonnes { grid-template-columns: 1fr; } }
+
+.legende { display: flex; gap: 16px; font-size: 0.8rem; color: var(--doux); margin-bottom: 6px; }
+.pastille { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+.graph { width: 100%; height: auto; display: block; overflow: visible; }
+.graph text { fill: currentColor; font-size: 11px; }
+
+/* ---------- Tableau agences ---------- */
+.tableWrap { overflow-x: auto; max-height: 460px; overflow-y: auto; }
+.table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+.table th { position: sticky; top: 0; background: var(--fond-entete, rgba(127,127,127,.14)); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); text-align: left; font-weight: 600; padding: 8px; border-bottom: 1px solid var(--trait); white-space: nowrap; }
+.table td { padding: 7px 8px; border-bottom: 1px solid var(--trait); white-space: nowrap; }
+.table .num { text-align: right; }
+.barrePart { display: inline-block; height: 6px; border-radius: 3px; vertical-align: middle; margin-right: 8px; }
+.zoneTag { font-size: 0.72rem; padding: 1px 6px; border-radius: 4px; background: var(--voile); }
+.alerteTag { color: var(--alerte); font-weight: 600; }
+
+/* ---------- Catégories ---------- */
+.cat { display: grid; grid-template-columns: 120px 1fr 64px; align-items: center; gap: 10px; font-size: 0.85rem; margin-bottom: 10px; }
+.catPiste { height: 10px; border-radius: 5px; background: var(--voile); overflow: hidden; }
+.catBarre { height: 100%; border-radius: 5px; background: var(--eau); }
+.catPrix { grid-column: 2 / 4; margin-top: -6px; font-size: 0.74rem; color: var(--doux); }
+
+/* ---------- Qualité ---------- */
+.details summary { cursor: pointer; font-weight: 600; font-size: 0.9rem; }
+.details ul { margin: 10px 0 0; padding-left: 18px; font-size: 0.83rem; line-height: 1.55; }
+.note { font-size: 0.78rem; color: var(--doux); margin: 0; line-height: 1.5; }
+.etat { padding: 28px; text-align: center; font-size: 0.9rem; color: var(--doux); }
+.erreur { color: var(--alerte); }
+
+/* ---------- Carte DG ---------- */
+.carte { border: 1px solid var(--trait); border-radius: 12px; padding: 16px; display: grid; gap: 12px; font-variant-numeric: tabular-nums; }
+.carteHaut { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.carteTitre { margin: 0; font-size: 0.95rem; font-weight: 600; }
+.lien { font-size: 0.8rem; color: var(--eau); text-decoration: none; }
+.lien:hover { text-decoration: underline; }
+.carteValeur { font-size: 2rem; font-weight: 700; line-height: 1; }
+.repartition { display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--voile); }
+.top { margin: 0; padding: 0; list-style: none; display: grid; gap: 4px; font-size: 0.83rem; }
+.top li { display: flex; justify-content: space-between; gap: 8px; }

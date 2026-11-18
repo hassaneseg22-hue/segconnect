@@ -31,6 +31,7 @@ import {
   CartesianGrid,
 } from 'recharts';
 import { useDataRefresh } from '@/lib/use-data-version';
+import SectionFacturation from '@/components/facturation/SectionFacturation';
 
 /* =====================================================================
  * Tableau de bord technique (DG)
@@ -93,6 +94,7 @@ type TechData = {
     nrw: number | null;
     light: Light;
     dataIssue: string | null;
+    reported?: { statut: string; gravite: string; causes: string[] } | null;
   }>;
   categories: Array<{ name: string; ca: number; volume: number; share: number }>;
   admShare: number;
@@ -254,6 +256,10 @@ export default function TableauTechniquePage() {
           </div>
 
           <CyclesChart d={d} />
+
+          <div className="dashboard-card">
+            <SectionFacturation />
+          </div>
 
           <AgenciesTable d={d} />
           <CentersTable d={d} />
@@ -698,6 +704,7 @@ function CentersTable({ d }: { d: TechData }) {
                   <th className="r">Part ADM</th>
                   <th className="r">Rendement</th>
                   <th className="r">Gasoil / 1000 m³</th>
+                  <th>Rapport DC</th>
                   <th>Contrôle</th>
                 </tr>
               </thead>
@@ -723,6 +730,19 @@ function CentersTable({ d }: { d: TechData }) {
                     </td>
                     <td className="r">{fmtPct(c.treatmentYield)}</td>
                     <td className="r">{c.gasoilPer1000 !== null ? `${c.gasoilPer1000.toLocaleString('fr-FR', { maximumFractionDigits: 1 })} L` : '—'}</td>
+                    <td>
+                      {c.reported ? (
+                        <span
+                          className={`badge-pill ${c.reported.statut === 'arret' ? 'red' : 'amber'}`}
+                          title={c.reported.causes.join(' + ')}
+                        >
+                          {c.reported.statut === 'arret' ? 'Arrêt' : 'Perturbé'}
+                          {c.reported.causes.length ? ` · ${c.reported.causes[0]}` : ''}
+                        </span>
+                      ) : (
+                        <span className="tt-muted">—</span>
+                      )}
+                    </td>
                     <td>
                       {c.dataIssue ? (
                         <span className="badge-pill amber" title={c.dataIssue}>

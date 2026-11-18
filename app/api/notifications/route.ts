@@ -25,7 +25,7 @@ export async function GET(req: NextRequest) {
       type: sp.get('type') || undefined,
       category: sp.get('category') || undefined,
     });
-    const data = sanitizeNotifications(rows, access.canSeeSensitive);
+    const data = sanitizeNotifications(rows, access.canSeeSensitive, access.canSeeAgenda);
     const counts = await getCounts();
     return NextResponse.json({ ok: true, data, counts }, { headers: NO_STORE });
   } catch (e) {

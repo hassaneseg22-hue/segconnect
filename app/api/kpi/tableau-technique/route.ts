@@ -354,6 +354,60 @@ export async function GET(request: Request) {
       if (c.light === 'red') alerts.push({ level: 'orange', title: `Centre ${c.name} : ${pct(c.nrw ?? 0)} de l’eau traitée non facturée`, detail: `Sur ${c.commonMonths} mois communs aux relevés et à la facturation.` });
       if (c.nrw !== null && c.nrw < 0) alerts.push({ level: 'info', title: `Centre ${c.name} : facturé > eau traitée`, detail: 'Incohérence entre relevés techniques et facturation, à vérifier.' });
     }
+    // Rapport DC « problèmes techniques urgents des centres de l'intérieur » (table centres_problemes)
+    if (year === new Date().getFullYear()) {
+      try {
+        const { data: lastRapport } = await supabaseAdmin
+          .from('centres_problemes').select('rapport_date').order('rapport_date', { ascending: false }).limit(1);
+        const rapportDate = lastRapport?.[0]?.rapport_date as string | undefined;
+        if (rapportDate) {
+          const { data: probs } = await supabaseAdmin
+            .from('centres_problemes')
+            .select('centre,region,statut,gravite,categories,probleme')
+            .eq('rapport_date', rapportDate)
+            .neq('statut', 'resolu');
+          type Prob = { centre: string; region: string; statut: string; gravite: string; categories: string[] | null; probleme: string };
+          const CAUSE: Record<string, string> = {
+            carburant: 'Manque de carburant', produits_chimiques: 'Produits chimiques', fuite: 'Fuite sur conduite',
+            panne_equipement: 'Panne d’équipement', electricite_edg: 'Électricité EDG', vandalisme: 'Vandalisme',
+            travaux: 'Travaux', consommables: 'Consommables',
+          };
+          const causesOf = (p: Prob) => (p.categories ?? []).map((k) => CAUSE[k] ?? k);
+          const problems = (probs ?? []) as Prob[];
+          const byKey = new Map<string, Prob>(problems.map((p) => [centerKey(String(p.centre)), p]));
+          for (const c of centersRanking) {
+            const p = byKey.get(c.key);
+            (c as any).reported = p ? { statut: p.statut, gravite: p.gravite, causes: causesOf(p) } : null;
+          }
+          const dateFr = new Date(rapportDate).toLocaleDateString('fr-FR');
+          const list = (arr: Prob[]) => arr.map((p) => `${p.centre} (${causesOf(p).slice(0, 2).join(' + ') || 'cause non précisée'})`).join(' · ');
+          const stopped = problems.filter((p) => p.statut === 'arret');
+          const disturbed = problems.filter((p) => p.statut === 'perturbe' || p.statut === 'en_cours');
+          if (stopped.length) alerts.push({ level: 'red', title: `${stopped.length} centre(s) de l’intérieur à l’arrêt (rapport du ${dateFr})`, detail: `${list(stopped)}. Détail : page Centres de l’intérieur.` });
+          if (disturbed.length) alerts.push({ level: 'orange', title: `${disturbed.length} centre(s) à production perturbée (rapport du ${dateFr})`, detail: `${list(disturbed)}.` });
+
+          // Croisement avec les relevés techniques : centres à 0 m³ le dernier mois mais absents du rapport.
+          const monthsWithData = Array.from(new Set(tech.map((r) => String(r.period_month).slice(0, 7)))).sort();
+          const lastM = monthsWithData[monthsWithData.length - 1];
+          if (lastM) {
+            const zero = new Map<string, string>();
+            for (const r of tech) {
+              if (String(r.period_month).slice(0, 7) !== lastM || n(r.treated_water_m3) !== 0) continue;
+              const k = centerKey(r.center_name);
+              if (!zero.has(k)) zero.set(k, r.center_name);
+            }
+            const unreported = Array.from(zero.entries()).filter(([k]) => !byKey.has(k)).map(([, name]) => name);
+            if (unreported.length) alerts.push({
+              level: 'info',
+              title: `${unreported.length} centre(s) à 0 m³ en ${lastM} absent(s) du rapport`,
+              detail: `${unreported.join(', ')} : aucune eau traitée dans les relevés techniques, mais aucun problème signalé dans le rapport du ${dateFr}.`,
+            });
+          }
+        }
+      } catch (e) {
+        console.error('[tableau-technique] rapport centres:', e instanceof Error ? e.message : e);
+      }
+    }
     // Incidents de terrain encore ouverts (registre seg_evenements_terrain)
     {
       const { data: openEvents } = await supabaseAdmin

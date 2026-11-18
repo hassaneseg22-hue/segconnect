@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Bell, CheckCheck, Eye, ExternalLink, RefreshCw } from 'lucide-react';
 import { useRouter } from 'next/navigation';
+import { PushToggle } from '@/components/PushToggle';
 
 type Notif = {
   id: number;
@@ -137,6 +138,7 @@ export function NotificationBell() {
           </div>
 
           {/* Filtres par catégorie */}
+          <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-color)' }}><PushToggle /></div>
           <div className="notif-filters">
             {([['all', 'Tout'], ['critical', 'Critique'], ['warning', 'Attention'], ['info', 'Info'], ['success', 'Système']] as const).map(([k, label]) => (
               <button

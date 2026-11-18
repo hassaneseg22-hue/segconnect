@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState } from 'react';
 
 import { KpiGrid } from '@/components/Kpi';
+import { NewFeatureBubble } from '@/components/NewFeatureBubble';
+import { RealisationResume } from '@/components/production/RealisationResume';
 import type { KpiItem } from '@/lib/dashboard-data';
 import { NationalMap } from '@/components/NationalMap';
 
@@ -684,14 +686,25 @@ export function DashboardClient() {
           KPI
           ====================================================== */}
 
-      <KpiGrid items={kpis} />
+      <NewFeatureBubble id="kpi-conakry-2026-11" block title="Chiffres de Conakry à jour" lines={["Chiffre d’affaires et volumes facturés de Conakry désormais disponibles jusqu’à septembre 2026."]}>
+        <KpiGrid items={kpis} />
+      </NewFeatureBubble>
+
+      {/* ======================================================
+          TAUX DE RÉALISATION DE LA PRODUCTION (DPR, janvier → octobre 2026)
+          ====================================================== */}
+
+      <NewFeatureBubble id="accueil-realisation-2026" block title="Nouveau : taux de réalisation de la production" lines={["Production de janvier à octobre 2026 comparée à la capacité des 44 sites (DPR).", "Touchez « Détail » pour le classement complet."]}>
+        <RealisationResume variante="national" />
+      </NewFeatureBubble>
 
 
       {/* ======================================================
           FACTURATION — DONNÉES COMPLÉMENTAIRES SUPABASE
           ====================================================== */}
 
-      <section className="dashboard-card">
+      <NewFeatureBubble id="facturation-centres-2026-11" block title="Facturation des centres corrigée" lines={["Données de janvier à août 2026 pour les 28 centres.", "Juin était surévalué d’environ 24 Md GNF : il est corrigé."]}>
+        <section className="dashboard-card">
         <div className="card-header-flex">
           <div>
             <h3>Facturation des centres de l’intérieur — exercice {year}</h3>
@@ -1041,6 +1054,7 @@ export function DashboardClient() {
           </span>
         </div>
       </section>
+      </NewFeatureBubble>
 
 
 

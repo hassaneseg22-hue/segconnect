@@ -25,6 +25,7 @@ export async function notificationAccess(user: User) {
     canRead: has('notifications.view') || has('dashboard.view'),
     canManage: has('notifications.view'),
     canSeeSensitive: has('audit.view') || has('users.view') || has('notifications.view'),
+    canSeeAgenda: has('calendrier.view'),
   };
 }
 
@@ -41,8 +42,9 @@ function scrub(value: unknown): unknown {
   return value;
 }
 
-export function sanitizeNotifications(rows: NotificationRow[], canSeeSensitive: boolean): NotificationRow[] {
+export function sanitizeNotifications(rows: NotificationRow[], canSeeSensitive: boolean, canSeeAgenda = false): NotificationRow[] {
   return rows
+    .filter((n) => canSeeAgenda || String(n.category ?? '').toUpperCase() !== 'AGENDA')
     .filter((n) => canSeeSensitive || !SENSITIVE_CATEGORIES.has(String(n.category ?? '').toUpperCase()))
     .map((n) => {
       if (n.metadata == null) return n;
